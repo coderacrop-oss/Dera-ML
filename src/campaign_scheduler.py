@@ -284,6 +284,20 @@ def build_schedule(
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
+def snapshot_segments(out_dir: str, month: str) -> str | None:
+    """Copy segments_latest.json (written by the pipeline) to segments_<month>.json.
+
+    Returns the new path, or None when the pipeline has not produced segments_latest.json.
+    """
+    src = os.path.join(out_dir, "segments_latest.json")
+    if not os.path.exists(src):
+        return None
+    dst = os.path.join(out_dir, f"segments_{month}.json")
+    with open(src, encoding="utf-8") as f:
+        atomic_write_text(dst, f.read())
+    return dst
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monthly campaign scheduler from broadcast_list.csv")
     parser.add_argument("--broadcast",    default="data/processed/broadcast_list.csv")
@@ -351,6 +365,7 @@ def main():
     atomic_write_text(schedule_path, schedule_df.to_csv(index=False))
     atomic_write_text(holdout_path, holdout_df.to_csv(index=False))
     atomic_write_text(summary_path, json.dumps(summary, ensure_ascii=False, indent=2))
+    snapshot_segments(args.out_dir, args.month)
 
     # ── Print summary ──────────────────────────────────────────────────────
     print(f"\n{'='*60}")

@@ -11,6 +11,7 @@ from sklearn.metrics import silhouette_score
 from layer5_llm_summarizer import generate_campaign_action_plan
 from business_config import CONFIG
 from pipeline_logger import log
+from crm_export import write_segments_latest
 
 # ==========================================
 # Layer 0: CSV Data Loader & Preprocessing
@@ -546,6 +547,7 @@ if __name__ == "__main__":
             suppressed_count=int((layer4_df["should_send"] == 0).sum()) if layer4_df is not None else 0)
 
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
+        write_segments_latest(validated_payload)  # for the CRM API
 
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")
         print("\n" + "="*50)

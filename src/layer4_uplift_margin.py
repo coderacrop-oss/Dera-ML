@@ -346,7 +346,8 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
         # Normalize transaction_id
         if 'transaction_id' not in df.columns:
             df['transaction_id'] = df.index.astype(str)
-        df['customer_id'] = df['customer_id'].astype(float).astype(int).astype(str)
+        # "123.0" -> "123" (float-formatted numeric IDs) but keep alphanumeric IDs ("M02073") intact
+        df['customer_id'] = df['customer_id'].astype(str).str.replace(r'\.0$', '', regex=True)
         # Optional columns — fill if missing
         if 'promo_applied' not in df.columns:
             df['promo_applied'] = df['is_treated']
