@@ -39,7 +39,8 @@ class XLearnerModel:
 
     @property
     def n_features_(self):
-        return self.mu0.n_features_
+        # CalibratedClassifierCV uses n_features_in_; raw LGBMClassifier uses n_features_
+        return getattr(self.mu0, 'n_features_in_', getattr(self.mu0, 'n_features_', None))
 
 
 class TLearnerModel:
@@ -56,7 +57,8 @@ class TLearnerModel:
 
     @property
     def n_features_(self):
-        return self.mu0.n_features_
+        # CalibratedClassifierCV uses n_features_in_; raw LGBMClassifier uses n_features_
+        return getattr(self.mu0, 'n_features_in_', getattr(self.mu0, 'n_features_', None))
 
 
 def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
@@ -79,13 +81,25 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
         mu0.fit(ctrl_data[features],  ctrl_data['converted'])
         return TLearnerModel(mu1, mu0)
 
-    # Stage 1: Base learners (outcome models)
-    mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
-                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                              colsample_bytree=0.8, verbose=-1)
-    mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
-                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                              colsample_bytree=0.8, verbose=-1)
+    # Stage 1: Base learners (outcome models) — calibrated for reliable P(Y=1|X)
+    # Raw LightGBM probabilities are uncalibrated: predict_proba(X) = 0.7 ≠ 70% purchase rate.
+    # Miscalibrated P(Y=1) propagates directly to profit estimates via:
+    #   baseline_profit = gross_margin * p_baseline
+    #   incremental     = gross_margin * (p_treated - p_baseline) - promo_cost
+    # CalibratedClassifierCV(isotonic, cv=3) fits an isotonic regression on OOF predictions
+    # to map raw scores → calibrated probabilities. Also used in Stage 2 cross-predictions.
+    mu1 = CalibratedClassifierCV(
+        lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                           reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                           colsample_bytree=0.8, verbose=-1),
+        method='isotonic', cv=3
+    )
+    mu0 = CalibratedClassifierCV(
+        lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                           reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                           colsample_bytree=0.8, verbose=-1),
+        method='isotonic', cv=3
+    )
     mu1.fit(treat_data[features], treat_data['converted'])
     mu0.fit(ctrl_data[features],  ctrl_data['converted'])
 
