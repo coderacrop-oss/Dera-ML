@@ -81,3 +81,13 @@ def test_calendar_token_disabled_when_not_configured(data_dir):
     c = TestClient(create_app(Settings(data_dir=data_dir, api_key=KEY, calendar_token=None)))
     assert c.get("/v1/plans/2026-12/calendar.ics?token=").status_code == 401
     assert c.get("/v1/plans/2026-12/calendar.ics", headers=HDR).status_code == 200
+
+
+def test_ics_source_has_no_invalid_escape_sequences():
+    import warnings
+    from pathlib import Path
+    import crm_api.ics as mod
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compile(src, mod.__file__, "exec")

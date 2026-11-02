@@ -39,3 +39,22 @@ def test_scheduler_snapshots_segments_for_month(tmp_path):
     out = snapshot_segments(str(tmp_path), "2026-12")
     assert out.endswith("segments_2026-12.json")
     assert json.load(open(out, encoding="utf-8"))["segments"][0]["name"] == "Champions"
+
+
+def test_segments_json_is_strict_json_and_tolerates_odd_values(tmp_path):
+    import pandas as pd
+    payload = _payload()
+    payload["target_segments"][0]["unit_economics"]["net_profit_per_head"] = float("nan")
+    payload["target_segments"][0]["unit_economics"]["computed_at"] = pd.Timestamp("2026-11-03")
+    path = write_segments_latest(payload, str(tmp_path))
+    text = open(path, encoding="utf-8").read()
+    assert "NaN" not in text
+    assert json.loads(text)["segments"][0]["unit_economics"]["net_profit_per_head"] is None
+
+
+def test_export_segments_safe_never_raises(tmp_path):
+    from crm_export import export_segments_safe
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")
+    assert export_segments_safe(_payload(), str(blocker)) is None  # cannot mkdir under a file
+    assert export_segments_safe(_payload(), str(tmp_path / "ok")).endswith("segments_latest.json")

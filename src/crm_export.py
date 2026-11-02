@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 
@@ -9,6 +10,21 @@ from atomic_io import atomic_write_text
 
 # Same week layout the scheduler uses (campaign_scheduler.build_schedule wave_week_map), 1-based weeks.
 WAVE_WEEKS = {"1": [1, 3], "2": [2, 4], "3": [1]}
+
+
+def _json_safe(obj):
+    """NaN/inf -> None (strict JSON), numpy scalars -> python, anything else unknown -> str."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if hasattr(obj, "item") and callable(obj.item) and getattr(obj, "shape", None) == ():
+        obj = obj.item()
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if obj is None or isinstance(obj, (str, int, bool)):
+        return obj
+    return str(obj)
 
 
 def _get(d: dict, key: str):
@@ -43,5 +59,18 @@ def write_segments_latest(payload: dict, out_dir: str = "data/processed") -> str
     }
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "segments_latest.json")
-    atomic_write_text(path, json.dumps(doc, ensure_ascii=False, indent=2, default=int))
+    atomic_write_text(path, json.dumps(_json_safe(doc), ensure_ascii=False, indent=2, allow_nan=False))
     return path
+
+
+def export_segments_safe(payload: dict, out_dir: str = "data/processed") -> str | None:
+    """Optional side-export for the CRM API: log and return None instead of ever aborting the pipeline."""
+    try:
+        return write_segments_latest(payload, out_dir)
+    except Exception as exc:  # noqa: BLE001 - must never break the caller
+        try:
+            from pipeline_logger import log
+            log("L4", "crm_export_failed", level="ERROR", exc=f"{type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
+        return None

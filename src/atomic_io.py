@@ -15,6 +15,11 @@ def atomic_write_text(path: str, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
+        # mkstemp creates 0600; give the file the mode a plain open() would (0666 & ~umask) so a
+        # reader running as another user (e.g. the CRM API service) can still read it.
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
