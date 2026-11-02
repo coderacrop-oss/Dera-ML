@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-import hmac
+from fastapi import Depends, FastAPI
 
-from fastapi import Depends, FastAPI, Request
-
-from .errors import ApiError, install_handlers
+from .auth import require_key
+from .errors import install_handlers
 from .loaders import list_months
-from . import catalog, plans
+from . import catalog, ics, plans
 from .settings import Settings
-
-
-def require_key(request: Request) -> None:
-    given = request.headers.get("X-API-Key", "")
-    expected = request.app.state.settings.api_key
-    if not hmac.compare_digest(given.encode(), expected.encode()):
-        raise ApiError(401, "unauthorized", "missing or invalid X-API-Key")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -33,6 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     for r in (plans.router, catalog.router):
         app.include_router(r, prefix="/v1", dependencies=[Depends(require_key)])
+    app.include_router(ics.router, prefix="/v1")  # own auth: key OR calendar token
     return app
 
 
