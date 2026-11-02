@@ -1,19 +1,17 @@
 """
 transform.py — Feature Transformation for Uplift Modelling
 Time-decay RFM, sequential behavioral features, promo response,
-covariate balance scoring, and interaction terms.
+and interaction terms.
 """
 
 from __future__ import annotations
 
-import warnings
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy as scipy_entropy
 from scipy.stats.mstats import winsorize as scipy_winsorize
-from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 
@@ -33,10 +31,9 @@ class UpliftTransformer:
     2. Sequential behav.   — inter_visit_cv, burst_ratio,
                              recency_acceleration, night_owl_ratio,
                              weekend_premium
-    3. Promo response      — promo_recency_score, promo_elasticity,
-                             promo_type_diversity, coupon_redemption_rate
-    4. Covariate balance   — propensity_proxy
-    5. Interaction terms   — recency_x_frequency, monetary_x_promo,
+    3. Promo response      — avg_basket_size, promo_elasticity,
+                             category_diversity, coupon_redemption_rate
+    4. Interaction terms   — recency_x_frequency, monetary_x_promo,
                              tenure_x_regularity
 
     All output columns are float32, winsorised at [1%, 99%], then
@@ -56,13 +53,11 @@ class UpliftTransformer:
         "night_owl_ratio",
         "weekend_premium",
         # Group 3 — Promo response
-        "promo_recency_score",
+        "avg_basket_size",
         "promo_elasticity",
-        "promo_type_diversity",
+        "category_diversity",
         "coupon_redemption_rate",
-        # Group 4 — Covariate balance
-        "propensity_proxy",
-        # Group 5 — Interaction terms
+        # Group 4 — Interaction terms
         "recency_x_frequency",
         "monetary_x_promo",
         "tenure_x_regularity",
@@ -135,8 +130,6 @@ class UpliftTransformer:
             .join(_promo_response(df, ref_date, lam), how="left")
             .fillna(0.0)
         )
-
-        feat["propensity_proxy"] = _propensity_proxy(df, feat)
 
         feat["recency_x_frequency"] = feat["rfm_recency_score"] * feat["rfm_frequency_decay"]
         feat["monetary_x_promo"]    = feat["rfm_monetary_decay"] * feat["promo_elasticity"]
@@ -292,14 +285,16 @@ def _sequential_behavioral(df: pd.DataFrame, ref_date: pd.Timestamp) -> pd.DataF
 
 def _promo_response(df: pd.DataFrame, ref_date: pd.Timestamp, lam: float) -> pd.DataFrame:
     """
-    promo_recency_score    : exp(-days_since_last_promo / halflife)
-    promo_elasticity       : avg spend on promo days vs adjacent ±1-day non-promo
-    promo_type_diversity   : Shannon entropy of promo type distribution
+    avg_basket_size    : mean quantity per transaction (customer purchase intensity,
+                         treatment-independent)
+    promo_elasticity   : avg spend on promo days vs adjacent ±1-day non-promo
+    category_diversity : Shannon entropy of ALL transactions over product categories
+                         (heterogeneity signal; not treatment-dependent)
     coupon_redemption_rate : redeemed / offered (0 if columns absent)
     """
     records: dict[str, dict] = {col: {} for col in [
-        "promo_recency_score", "promo_elasticity",
-        "promo_type_diversity", "coupon_redemption_rate",
+        "avg_basket_size", "promo_elasticity",
+        "category_diversity", "coupon_redemption_rate",
     ]}
 
     is_promo       = df["promo_type"] != "none"
@@ -312,16 +307,15 @@ def _promo_response(df: pd.DataFrame, ref_date: pd.Timestamp, lam: float) -> pd.
     )
 
     for cid, grp in df.groupby("customer_id"):
-        promo_grp = grp[is_promo.loc[grp.index]]
+        # avg_basket_size: mean quantity per transaction (treatment-independent)
+        records["avg_basket_size"][cid] = float(grp["quantity"].mean()) if len(grp) > 0 else 1.0
 
-        if len(promo_grp) > 0:
-            days_since_promo = (ref_date - promo_grp["timestamp"].max()).days
-            records["promo_recency_score"][cid] = float(np.exp(-lam * max(0, days_since_promo)))
-            counts = promo_grp["promo_type"].value_counts()
-            records["promo_type_diversity"][cid] = float(scipy_entropy(counts / counts.sum()))
+        # category_diversity: Shannon entropy over ALL transactions' categories
+        cat_counts = grp["category"].value_counts()
+        if len(cat_counts) > 1:
+            records["category_diversity"][cid] = float(scipy_entropy(cat_counts / cat_counts.sum()))
         else:
-            records["promo_recency_score"][cid]  = 0.0
-            records["promo_type_diversity"][cid]  = 0.0
+            records["category_diversity"][cid] = 0.0
 
         records["coupon_redemption_rate"][cid] = (
             float(grp["coupon_redeemed"].sum() / grp["coupon_offered"].sum())
@@ -369,34 +363,3 @@ def _compute_promo_elasticity(
 
     return float(np.mean(ratios)) if ratios else 1.0
 
-
-# ---------------------------------------------------------------------------
-# Group 4 — Covariate balance / propensity proxy
-# ---------------------------------------------------------------------------
-
-def _propensity_proxy(df: pd.DataFrame, feat: pd.DataFrame) -> pd.Series:
-    """
-    Fit P(was_treated | features) logistic regression as a covariate-balance signal.
-    Returns 0.5 if 'is_treated' is absent or has only one class.
-    """
-    if "is_treated" not in df.columns:
-        return pd.Series(0.5, index=feat.index)
-
-    treatment = df.groupby("customer_id")["is_treated"].max().reindex(feat.index).fillna(0)
-    if treatment.nunique() < 2:
-        return pd.Series(0.5, index=feat.index)
-
-    X = feat.fillna(0.0).values.astype(np.float64)
-    if X.std(axis=0).sum() == 0:
-        return pd.Series(0.5, index=feat.index)
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        X_scaled = StandardScaler().fit_transform(X)
-        proba = (
-            LogisticRegression(max_iter=200, solver="lbfgs", C=1.0, random_state=42)
-            .fit(X_scaled, treatment.values.astype(int))
-            .predict_proba(X_scaled)[:, 1]
-        )
-
-    return pd.Series(proba, index=feat.index, name="propensity_proxy")
