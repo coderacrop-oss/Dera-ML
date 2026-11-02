@@ -2,7 +2,7 @@
 
 **Author:** หนึ่ง หงษ์โต
 **Affiliation:** Codera Solutions
-**Version:** Draft v1.5 — Confidential
+**Version:** Draft v1.6 — Confidential
 **Date:** November 2026
 **Status:** Working Paper — Internal Review
 
@@ -13,7 +13,7 @@
 
 ## Abstract
 
-Small and medium enterprises (SMEs) in retail and food service routinely collect transactional data through point-of-sale (POS) systems yet rarely leverage it for marketing decisions, primarily due to resource constraints and the technical complexity of existing analytics solutions. This paper presents a five-layer MLOps pipeline — the **ML Campaign Engine** — that transforms raw POS transaction records requiring only six standard fields into financially validated, per-customer campaign action plans without requiring a dedicated data science team. The framework integrates RFM-based customer segmentation (K-means with dynamic cluster selection via silhouette scoring), market basket analysis (Apriori), dynamic context detection, uplift modeling (LightGBM), and a local large language model (LLM) reporting layer. A novel **CFO Guardrail** mechanism enforces a configurable minimum net margin floor prior to campaign dispatch, designed to ensure that no promotion is deployed at a financial loss regardless of predicted uplift score — an architectural contribution that embeds financial constraint validation directly into the ML decision loop, as validated on synthetic and public datasets in this paper. Layer 4 produces a per-customer `should_send` flag and exports a `broadcast_list.csv` ready for direct ingestion by automation tools (email, SMS, LINE OA), with per-segment approval counts surfaced in the Layer 5 executive report. COGS rate and discount rate are estimated automatically from data when sufficient transaction history is available, eliminating manual calibration for new deployments. The framework is evaluated on four datasets: (1) a synthetic restaurant POS dataset calibrated to F&B SME industry benchmarks (9,344 transaction line items, 200 customers, 6-month observation window; silhouette = 0.679; k = 2); (2) a public real-world marketing campaign dataset containing ground-truth promotion response labels (905 customers, aggregated spending records; silhouette = 0.347; k = 3); (3) the Dunnhumby Complete Journey public grocery dataset (2,500 households, 2,576,815 transaction rows, 117-week observation window; silhouette = 0.595; k = 3; data-driven COGS = 62.9%, discount = 7.6%; 599/2,500 customers approved for broadcast with X-learner, Δprofit = $1,147.56); and (4) a UK online retail e-commerce dataset (397,884 transaction line items, 4,338 customers; silhouette = 0.931 — the highest across all datasets; k = 2; 63/4,338 customers approved for broadcast with X-learner, Δprofit = $40,630). The pipeline's uplift model was initially implemented as a T-learner baseline (AUUC = 0.2351 on Dataset 1); the production model has since been upgraded to an **X-learner meta-learner** (Künzel et al. 2019) with n\_estimators = 200, better handling the imbalanced treatment/control group ratios common in SME deployment where only a minority of customers receive campaigns. Additionally, a **purpose-built Layer 3 synthetic test dataset** (Dataset 5: 500 customers, 90-day window, engineered peak-hour clustering and demand surge stockouts) was constructed and evaluated, confirming that the context detection layer correctly classifies 69.5% of transactions as Peak-hour, flags all three engineered stockout products as `in_stock = False`, and causes Layer 4 to suppress 23 customers (4.6%) via `Do Nothing (Out of Stock)` — validating Layer 3 behavior that could not be demonstrated on the four public datasets which lacked the required demand variability. A consistent finding across real-world datasets is that a naive broadcast campaign — sending promotions to all customers — produces model-estimated incremental profit *worse than running no campaign at all*, because promo costs exceed incremental revenue for the majority of customers who would purchase regardless. The CFO Guardrail converts money-losing broadcast scenarios into net-positive outcomes: +$1,148 on Dunnhumby (vs. −$262 broadcast-all) and +$40,630 on UK retail (vs. +$1,176 broadcast-all). The pipeline's advantage over naive broadcast scales consistently with dataset size: +0.3% at n=200 (synthetic, randomized labels), +538% at n=2,500 (Dunnhumby, X-learner, observational proxy), and +2,622% at n=4,338 (UK retail, observational proxy). The Dunnhumby X-learner result ($1,147.56 Δprofit, 599/2,500 broadcast) improves substantially over the T-learner baseline ($167.02, 103/2,500), primarily because X-learner correctly assigns near-zero uplift to Champions (0/506 broadcast) and redirects broadcast budget toward Potential Loyalists (564) and At-Risk (35) with genuine incremental response. All profit figures are model-estimated projections on synthetic or public datasets — not realized revenue from live deployment. Real-world profit impact will be measured in a forthcoming field study with a CRM-integrated POS operator using randomized holdout control groups. Results demonstrate that the proposed framework is robust across F&B, grocery, and e-commerce contexts, computationally accessible to SME hardware, and architecturally extensible to additional business verticals.
+Small and medium enterprises (SMEs) in retail and food service routinely collect transactional data through point-of-sale (POS) systems yet rarely leverage it for marketing decisions, primarily due to resource constraints and the technical complexity of existing analytics solutions. This paper presents a five-layer MLOps pipeline — the **ML Campaign Engine** — that transforms raw POS transaction records requiring only six standard fields into financially validated, per-customer campaign action plans without requiring a dedicated data science team. The framework integrates RFM-based customer segmentation (K-means with dynamic cluster selection via silhouette scoring), market basket analysis (Apriori), dynamic context detection, uplift modeling (LightGBM), and a local large language model (LLM) reporting layer. A novel **CFO Guardrail** mechanism enforces a configurable minimum net margin floor prior to campaign dispatch, designed to ensure that no promotion is deployed at a financial loss regardless of predicted uplift score — an architectural contribution that embeds financial constraint validation directly into the ML decision loop, as validated on synthetic and public datasets in this paper. Layer 4 produces a per-customer `should_send` flag and exports a `broadcast_list.csv` ready for direct ingestion by automation tools (email, SMS, LINE OA), with per-segment approval counts surfaced in the Layer 5 executive report. COGS rate and discount rate are estimated automatically from data when sufficient transaction history is available, eliminating manual calibration for new deployments. The framework is evaluated on four datasets: (1) a synthetic restaurant POS dataset calibrated to F&B SME industry benchmarks (9,344 transaction line items, 200 customers, 6-month observation window; silhouette = 0.679; k = 2); (2) a public real-world marketing campaign dataset containing ground-truth promotion response labels (905 customers, aggregated spending records; silhouette = 0.347; k = 3; 273/905 customers approved for broadcast, Δprofit = $3,666); (3) the Dunnhumby Complete Journey public grocery dataset (2,500 households, 2,576,815 transaction rows, 117-week observation window; silhouette = 0.595; k = 3; data-driven COGS = 62.9%, discount = 7.6%; 599/2,500 customers approved for broadcast with X-learner, Δprofit = $1,147.56); and (4) a UK online retail e-commerce dataset (397,884 transaction line items, 4,338 customers; silhouette = 0.931 — the highest across all datasets; k = 2; 63/4,338 customers approved for broadcast with X-learner, Δprofit = $40,630). The pipeline's uplift model was initially implemented as a T-learner baseline (AUUC = 0.2351 on Dataset 1); the production model has since been upgraded to an **X-learner meta-learner** (Künzel et al. 2019) with n\_estimators = 200, better handling the imbalanced treatment/control group ratios common in SME deployment where only a minority of customers receive campaigns. Additionally, a **purpose-built Layer 3 synthetic test dataset** (Dataset 5: 500 customers, 90-day window, engineered peak-hour clustering and demand surge stockouts) was constructed and evaluated, confirming that the context detection layer correctly classifies 69.5% of transactions as Peak-hour, flags all three engineered stockout products as `in_stock = False`, and causes Layer 4 to suppress 23 customers (4.6%) via `Do Nothing (Out of Stock)` — validating Layer 3 behavior that could not be demonstrated on the four public datasets which lacked the required demand variability. A consistent finding across real-world datasets is that a naive broadcast campaign — sending promotions to all customers — produces model-estimated incremental profit *worse than running no campaign at all*, because promo costs exceed incremental revenue for the majority of customers who would purchase regardless. The CFO Guardrail converts money-losing broadcast scenarios into net-positive outcomes: +$1,148 on Dunnhumby (vs. −$262 broadcast-all) and +$40,630 on UK retail (vs. +$1,176 broadcast-all). The pipeline's advantage over naive broadcast scales consistently with dataset size: +0.3% at n=200 (synthetic, randomized labels), +538% at n=2,500 (Dunnhumby, X-learner, observational proxy), and +2,622% at n=4,338 (UK retail, observational proxy). The Dunnhumby X-learner result ($1,147.56 Δprofit, 599/2,500 broadcast) improves substantially over the T-learner baseline ($167.02, 103/2,500), primarily because X-learner correctly assigns near-zero uplift to Champions (0/506 broadcast) and redirects broadcast budget toward Potential Loyalists (564) and At-Risk (35) with genuine incremental response. All profit figures are model-estimated projections on synthetic or public datasets — not realized revenue from live deployment. Real-world profit impact will be measured in a forthcoming field study with a CRM-integrated POS operator using randomized holdout control groups. Results demonstrate that the proposed framework is robust across F&B, grocery, and e-commerce contexts, computationally accessible to SME hardware, and architecturally extensible to additional business verticals.
 
 **Keywords:** MLOps, SME marketing, uplift modeling, X-learner, meta-learner, RFM segmentation, market basket analysis, campaign optimization, POS analytics, LightGBM, CFO guardrail, Champion-Challenger
 
@@ -473,16 +473,28 @@ The silhouette score of **0.679** is the highest observed across all evaluations
 
 For the Marketing Campaign dataset (905 customers — larger customer count than Dataset 1 though with fewer line items per customer), dynamic selection identified **k = 3** as optimal (silhouette score = **0.347**).
 
-| Segment | Customers | % of Total | AOV | Net Profit/Head | Campaign |
-|---------|-----------|------------|-----|-----------------|----------|
-| Champions (High) | 323 | 35.7% | $1,323 | $635 | VIP Early Access |
-| Champions (Low) | 456 | 50.4% | $230 | $111 | VIP Reward: X2 Points |
-| Promising | 126 | 13.9% | $229 | $80 | Bundle −15% |
-| **Total** | **905** | | | | |
+| Segment | Customers | % of Total | AOV | Net Profit/Head | Broadcast (L4) | Campaign |
+|---------|-----------|------------|-----|-----------------|----------------|----------|
+| 1. Champions & Loyal | 323 | 35.7% | $1,323 | $635 | 7 / 323 (2.2%)† | VIP Early Access |
+| 2. Potential Loyalists | 456 | 50.4% | $230 | $111 | 194 / 456 (42.5%) | Bundle −15% |
+| 3. At-Risk / Churning | 126 | 13.9% | $229 | $80 | 72 / 126 (57.1%) | Bundle −15% |
+| **Total** | **905** | | | | **273 / 905 (30.2%)** | |
 
-**Total projected campaign profit: $265,650 USD**
+†*X-learner suppresses 97.8% of Champions (only 7/323 approved), correctly identifying that high-AOV customers in this dataset have high baseline purchase propensity and near-zero incremental uplift from campaigns.*
 
-The lower silhouette score (0.347 vs. 0.679) reflects the aggregate-level nature of the marketing campaign data, which produces less geometrically distinct RFM clusters than transaction-level POS data. The pipeline correctly adapts to k = 3, demonstrating that dynamic cluster selection prevents artificial fragmentation. Champions (High) AOV of $1,323 is the highest single-segment AOV observed across both datasets. This dataset activates Layer 4's real label mode using `AcceptedCmp` and `Response` columns; however, because campaign acceptance is self-selected (not randomized), uplift estimates from this mode are observational signals rather than causal effects (see Section 4.4.1 caveat).
+**Total projected profit: $251,990 USD | Broadcast-only customers (X-learner): 273 (30.2%) | Suppressed: 632 (69.8%) | Layer 4 Δprofit: $3,666**
+
+The full Layer 4 decision breakdown across all 905 customers is:
+
+| Decision | Customers | % |
+|---|---|---|
+| ⛔ Do Nothing (Negative Uplift Guard) | 543 | 60.0% |
+| ✅ Push Promotion: Bundle | 201 | 22.2% |
+| ⛔ Do Nothing (Low Basket Size) | 89 | 9.8% |
+| ✅ Off-Peak Special | 72 | 8.0% |
+| **Total broadcast (should\_send = 1)** | **273** | **30.2%** |
+
+The lower silhouette score (0.347 vs. 0.679) reflects the aggregate-level nature of the marketing campaign data, which produces less geometrically distinct RFM clusters than transaction-level POS data. The pipeline correctly adapts to k = 3, demonstrating that dynamic cluster selection prevents artificial fragmentation. The high Negative Uplift Guard rate (60.0%) is consistent with a dataset where customers are high-frequency buyers (Frequency ≈ 5–6 across all segments) who purchase regardless of promotions. Champions AOV of $1,323 is the highest single-segment AOV across this dataset. This dataset uses RFM proxy labels (no separate promo response file detected at runtime); uplift estimates are directional signals rather than causal effects (see Section 4.4.1 caveat). Adaptive basket thresholds activate (P10 = $7.17, P50 = $74.83).
 
 ### 6.3 Customer Segmentation — Dunnhumby Grocery Dataset
 
@@ -623,13 +635,13 @@ The X-learner trained successfully with the RFM proxy label mode (no separate pr
 | Top segment AOV | ฿3,094 | $1,323 | $8,458 | **$126,118** |
 | Top segment Net/Head | ฿1,522 | $635 | $2,969 | **$60,537** |
 | Total projected profit | ฿74,439 | $265,650 | $2,615,474 | **$3,332,137** |
-| Broadcast approved | N/A (no L4 merge) | N/A | 599 / 2,500 (24.0%)† | **63 / 4,338 (1.5%)** |
+| Broadcast approved | N/A (no L4 merge) | 273 / 905 (30.2%) | 599 / 2,500 (24.0%)† | **63 / 4,338 (1.5%)** |
 | Revenue lift | +3.29% | N/A | N/A | N/A |
 | Label mode | Real (randomised) | Observational (AcceptedCmp) | Observational (proxy) | Observational (proxy) |
 | Adaptive thresholds | No (AOV >> $100) | No | Yes (P10=$2.24, P50=$3.03) | **Yes (P10=$5.99, P50=$17.72)** |
 | MBA bundles | Yes | No | Yes | **No (fallback)** |
-| Pipeline vs Broadcast All† | +0.3% | N/A | +538% (X-learner) | **+3,354%** |
-| Layer 4 Δprofit | ฿2,162 | N/A | $1,147.56 (X-learner) | **$40,630** |
+| Pipeline vs Broadcast All† | +0.3% | N/A (no broadcast-all baseline) | +538% (X-learner) | **+3,354%** |
+| Layer 4 Δprofit | ฿2,162 | $3,666 | $1,147.56 (X-learner) | **$40,630** |
 | Guardrail value saved† | ฿2,695 | N/A | $429+ | **$39,454** |
 
 †*Model-estimated incremental profit (Δprofit = gross\_margin × uplift\_score − promo\_cost) computed on observational/proxy labels — not realized revenue from live deployment. See disclaimer in Section 6.10.2. Dunnhumby figures reflect X-learner (n\_estimators = 200); T-learner baseline was 103 broadcast / $167.02 Δprofit.*
@@ -697,6 +709,17 @@ summed over targeted customers. This is not realized revenue from a live campaig
 | Random 30% Targeting | 60 | ฿744 | −฿1,418 |
 
 On the 200-customer synthetic dataset the pipeline's margin over naive broadcast is modest (+0.3%). The more meaningful comparison is against RFM-only (−฿1,334), which demonstrates that segment-based targeting without uplift frequently dispatches money-losing campaigns.
+
+**Dataset 2 — Marketing Campaign (905 customers, RFM proxy labels)**
+
+| Method | Customers | Est. Incremental Profit† | Δ vs Full Pipeline |
+|--------|-----------|-------------------------|--------------------|
+| Full Pipeline — X-learner (n\_est = 200) | 273 | **$3,666** | — |
+| No Campaign (baseline) | — | $0 | −$3,666 |
+
+†*RFM proxy labels; not causally interpretable. No broadcast-all baseline computed for this dataset as customer-level conversion probability under mass broadcast is not estimable from aggregate spend records.*
+
+The Marketing Campaign dataset produces a moderate Δprofit of $3,666 across 273 approved customers (30.2%). The Negative Uplift Guard (60.0%) dominates suppression, consistent with customers who purchase across multiple product categories regardless of campaign contact — a self-selection effect inherent to this dataset's observational structure.
 
 **Dataset 3 — Dunnhumby Grocery (2,500 customers, observational proxy labels)**
 
@@ -1005,6 +1028,6 @@ All business parameters are centralized in `src/business_config.py`. Operators a
 
 ---
 
-*End of Draft v1.5*
+*End of Draft v1.6*
 *Classification: Confidential — Proprietary Research*
 *© 2026 Codera Solutions · หนึ่ง หงษ์โต · All rights reserved*
