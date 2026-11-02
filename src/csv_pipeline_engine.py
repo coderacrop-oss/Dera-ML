@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -9,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from layer5_llm_summarizer import generate_campaign_action_plan
 from business_config import CONFIG
+from pipeline_logger import log
 
 # ==========================================
 # Layer 0: CSV Data Loader & Preprocessing
@@ -49,6 +51,7 @@ def load_and_preprocess_csv(file_path):
         
     df = df[df["amount"] > 0]
     print(f"✅ โหลดสำเร็จ! ข้อมูลดิบทั้งหมด {len(df):,} รายการ จากลูกค้า {df['customer_id'].nunique():,} คน")
+    log("L0", "load_complete", rows=len(df), unique_customers=df["customer_id"].nunique(), file=file_path)
     return df
 
 # ==========================================
@@ -127,7 +130,13 @@ def layer1_csv_segmentation(df):
             "avg_monetary": round(row["monetary"], 2)
         })
 
-    return sorted(segments, key=lambda x: x["segment_name"]), df_rfm
+    result = sorted(segments, key=lambda x: x["segment_name"])
+    log("L1", "segmentation_complete",
+        optimal_k=best_k,
+        silhouette_score=round(best_score, 4),
+        segments=[s["segment_name"] for s in result],
+        unique_customers=int(df_rfm["customer_id"].nunique()))
+    return result, df_rfm
 
 # ==========================================
 # Layer 2: MBA Co-occurrence จากข้อมูลจริง
@@ -207,6 +216,10 @@ def layer2_csv_mba(df, segments, df_rfm):
 
         enriched_segments.append(seg)
 
+    log("L2", "mba_complete",
+        segments_enriched=len(enriched_segments),
+        top_global_pair=f"{global_a} + {global_b}",
+        top_global_cooccurrence=global_count)
     return enriched_segments, df_rfm
 
 # ==========================================
@@ -335,13 +348,20 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
         total_profit += total_seg_profit
         updated_segments.append(seg)
 
-    return {
+    payload = {
         "campaign_name": "CSV Data Driven Retail Campaign",
         "planning_month": "พฤศจิกายน 2026",
         "target_segments": updated_segments,
         "gate_status": "PASSED",
         "total_campaign_projected_profit": f"{total_profit:,.2f} บาท"
-    }, product_cogs, estimated_cogs
+    }
+    log("L3", "unit_economics_complete",
+        segments_processed=len(updated_segments),
+        total_projected_profit=round(total_profit, 2),
+        cogs_rate=estimated_cogs,
+        discount_rate=estimated_discount,
+        gate_status="PASSED")
+    return payload, product_cogs, estimated_cogs
 
 
 def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
@@ -457,13 +477,31 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
 if __name__ == "__main__":
     csv_file = sys.argv[1] if len(sys.argv) > 1 else "data/transactions.csv"
     print("🚀 เริ่มต้นรัน CSV MLOps Campaign Pipeline...\n")
+    log("L0", "pipeline_start", csv_file=csv_file)
+    _pipeline_start = time.monotonic()
     try:
         from layer4_uplift_margin import run_layer4
 
+        _t0 = time.monotonic()
         df_raw = load_and_preprocess_csv(csv_file)
+        log("L0", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000), rows_out=len(df_raw))
+
+        _t0 = time.monotonic()
+        _rows_in = len(df_raw)
         segments, df_rfm = layer1_csv_segmentation(df_raw)
+        log("L1", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
+            rows_in=_rows_in, rows_out=int(df_rfm["customer_id"].nunique()))
+
+        _t0 = time.monotonic()
+        _rows_in = int(df_rfm["customer_id"].nunique())
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
+        log("L2", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
+            rows_in=_rows_in, rows_out=len(segments))
+
+        _t0 = time.monotonic()
         validated_payload, product_cogs, default_cogs = layer3_and_4_processing(segments, df_raw, df_rfm)
+        log("L3", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
+            rows_in=len(segments), rows_out=len(validated_payload["target_segments"]))
 
         print("\n🔍 [Layer 4] รัน LightGBM Uplift + CFO Guardrail...")
         # Resolve promo label source to prevent cross-dataset contamination when
@@ -478,17 +516,41 @@ if __name__ == "__main__":
         _header = pd.read_csv(_pos_abs, nrows=0).columns.tolist()
         if 'is_treated' in _header and 'post_promo_visit' in _header:
             promo_path = _pos_abs
+            _promo_source = "pos_file_direct"
         elif 'marketing_campaign' in _pos_name:
             _candidate = os.path.join(_pos_dir, "marketing_campaign.csv")
             promo_path = _candidate if os.path.exists(_candidate) else None
+            _promo_source = "marketing_campaign_companion" if promo_path else "rfm_proxy_fallback"
         else:
             promo_path = None
+            _promo_source = "rfm_proxy_fallback"
+        log("L4", "promo_path_routing",
+            promo_source=_promo_source,
+            promo_path=str(promo_path),
+            csv_file=csv_file)
+
+        _t0 = time.monotonic()
         layer4_df = run_layer4(pos_file_path=csv_file, promo_response_path=promo_path,
                                product_cogs_dict=product_cogs, default_cogs=default_cogs)
+        _l4_rows = len(layer4_df) if layer4_df is not None else 0
+        log("L4", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
+            rows_out=_l4_rows,
+            broadcast_count=int((layer4_df["should_send"] == 1).sum()) if layer4_df is not None else 0,
+            suppressed_count=int((layer4_df["should_send"] == 0).sum()) if layer4_df is not None else 0)
+
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
 
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")
         print("\n" + "="*50)
+        _t0 = time.monotonic()
         final_plan = generate_campaign_action_plan(validated_payload)
-    except FileNotFoundError:
+        log("L5", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000))
+
+        log("L0", "pipeline_end", status="SUCCESS",
+            total_duration_ms=round((time.monotonic() - _pipeline_start) * 1000))
+    except FileNotFoundError as exc:
+        log("L0", "pipeline_error", level="ERROR", exc=str(exc), csv_file=csv_file)
         print(f"⚠️ ไม่พบไฟล์ {csv_file} กรุณานำไฟล์ CSV วางไว้ในโฟลเดอร์ data/ หรือปรับ path ให้ถูกต้องครับ")
+    except Exception as exc:
+        log("L0", "pipeline_error", level="ERROR", exc=type(exc).__name__ + ": " + str(exc))
+        raise
