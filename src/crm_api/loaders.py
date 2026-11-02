@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -42,6 +42,7 @@ class MonthData:
     segments: dict | None
     etag: str
     generated_at: datetime
+    by_customer: dict | None = field(default=None, repr=False)  # lazily built by catalog
 
 
 _cache: dict[tuple, tuple[tuple, MonthData]] = {}

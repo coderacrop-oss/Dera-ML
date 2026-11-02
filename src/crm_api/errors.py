@@ -5,6 +5,7 @@ import re
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -35,3 +36,8 @@ def install_handlers(app: FastAPI) -> None:
     async def _validation(_: Request, exc: RequestValidationError):
         msg = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
         return JSONResponse(status_code=422, content=_body("validation_error", msg))
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http(_: Request, exc: StarletteHTTPException):
+        return JSONResponse(status_code=exc.status_code, content=_body(f"http_{exc.status_code}", str(exc.detail)),
+                            headers=getattr(exc, "headers", None))
