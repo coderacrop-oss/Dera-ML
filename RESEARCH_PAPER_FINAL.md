@@ -1,6 +1,6 @@
 # POS-Native MLOps: An Accessible Five-Layer Campaign Intelligence Framework for Small and Medium Enterprises in Retail and Food Service
 
-**Author:** หนึ่ง หงษ์โต
+**Author:** เป็นหนึ่ง หงษ์โต
 **Affiliation:** Codera Solutions
 **Version:** Draft v1.13 — Confidential
 **Date:** November 2026
