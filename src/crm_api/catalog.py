@@ -18,9 +18,7 @@ def segments(request: Request, month: str = Depends(valid_month)):
     return respond(request, data, {"month": month, "segments": data.segments.get("segments")})
 
 
-@router.get("/plans/{month}/promotions")
-def promotions(request: Request, month: str = Depends(valid_month)):
-    data = load_month(request.app.state.settings.data_dir, month)
+def _build_promotions(data) -> list[dict]:
     df = _with_window(data.schedule)
     out = []
     for action, g in df.groupby("recommended_action", sort=True):
@@ -33,16 +31,29 @@ def promotions(request: Request, month: str = Depends(valid_month)):
             "expected_profit": round(float(g["expected_profit"].sum()), 2),
             "example_message": msg.iloc[0] if len(msg) else None,
         })
-    return respond(request, data, {"month": month, "promotions": out})
+    return out
+
+
+@router.get("/plans/{month}/promotions")
+def promotions(request: Request, month: str = Depends(valid_month)):
+    data = load_month(request.app.state.settings.data_dir, month)
+    return respond(request, data, {"month": month, "promotions": data.memo("promotions", lambda: _build_promotions(data))})
+
+
+_INDEX_COLS = ["customer_id", "wave", "recommended_action", "offer", "message", "channel", "send_window",
+               "send_datetime"]
+
+
+def _build_index(data) -> dict:
+    """customer_id -> row dict (earliest send wins). Only the columns the endpoint serves are kept."""
+    df = _with_window(data.schedule)
+    df = df[[c for c in _INDEX_COLS if c in df.columns]].sort_values("send_datetime")
+    df = df.drop_duplicates("customer_id", keep="first")
+    return {str(r["customer_id"]): r for r in df.to_dict("records")}
 
 
 def _index(data) -> dict:
-    """customer_id -> row dict (earliest send wins), built once per cached MonthData."""
-    if data.by_customer is None:
-        df = _with_window(data.schedule).sort_values("send_datetime")
-        df = df.drop_duplicates("customer_id", keep="first")
-        data.by_customer = {str(r["customer_id"]): r for r in df.to_dict("records")}
-    return data.by_customer
+    return data.memo("customers", lambda: _build_index(data))
 
 
 @router.get("/plans/{month}/customers/{customer_id}")

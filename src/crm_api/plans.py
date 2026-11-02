@@ -77,6 +77,11 @@ def build_events(month: str, schedule: pd.DataFrame) -> list[dict]:
     return events
 
 
+def events_for(data: MonthData) -> list[dict]:
+    """All events of a loaded month, computed once (callers must not mutate the returned list)."""
+    return data.memo("events", lambda: build_events(data.month, data.schedule))
+
+
 @router.get("/plans/{month}")
 def plan_summary(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
@@ -105,7 +110,7 @@ def plan_events(request: Request, month: str = Depends(valid_month),
     if from_ and to and from_ > to:
         raise ApiError(422, "invalid_range", "'from' must not be after 'to'")
     data = load_month(request.app.state.settings.data_dir, month)
-    events = build_events(month, data.schedule)
+    events = events_for(data)
     if from_:
         events = [e for e in events if e["start"][:10] >= from_.isoformat()]
     if to:

@@ -34,6 +34,10 @@ changes; clients can use the `ETag` header / `If-None-Match` (→ `304`) to dete
 | `GET /v1/plans/{month}/customers/{id}` | that customer's scheduled offer; `404` for holdout/suppressed/unknown |
 
 Errors: `{"error": {"code", "message"}}` with `401/404/422/503`.
+`503 data_unavailable` is retry-able: a file is missing/unparseable, or the files of a month disagree with the
+row counts in `campaign_summary_*.json` (e.g. read while the pipeline is mid-update). The API never serves
+a partial plan. Derived views (events, promotions, `.ics`, customer index) are computed once per loaded
+month and refreshed automatically when the files change.
 
 ```bash
 curl -H "X-API-Key: $CRM_API_KEY" localhost:8000/v1/plans/2026-12

@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from .auth import require_key_or_calendar_token
 from .errors import valid_month
 from .loaders import TZ, load_month
-from .plans import build_events
+from .plans import events_for
 
 router = APIRouter()
 
@@ -73,5 +73,5 @@ def render_calendar(month: str, events: list[dict], generated_at: datetime) -> s
 @router.get("/plans/{month}/calendar.ics", dependencies=[Depends(require_key_or_calendar_token)])
 def calendar_feed(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
-    body = render_calendar(month, build_events(month, data.schedule), data.generated_at)
+    body = data.memo("ics", lambda: render_calendar(month, events_for(data), data.generated_at))
     return Response(content=body, media_type="text/calendar; charset=utf-8", headers={"ETag": data.etag})
