@@ -125,7 +125,10 @@ def segmentation_customers(
         rows = _rows(df)
         return [r["customer_id"] for r in rows], rows
 
-    ids, rows = data.memo(scope, build)
+    if segment_id is not None and segment_id not in {s["id"] for s in data.summary}:
+        ids, rows = [], []  # not a segment of this shop: answer empty WITHOUT memoising (the id comes from the caller)
+    else:
+        ids, rows = data.memo(scope, build)
     start = 0
     if cursor:
         c = decode_cursor(cursor)

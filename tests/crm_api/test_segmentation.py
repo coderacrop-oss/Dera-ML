@@ -121,3 +121,15 @@ def test_empty_file_is_a_valid_empty_segmentation(data_dir, client):
     assert body["total_customers"] == 0 and body["segments"] == []
     page = client.get("/v1/segmentation/customers", headers=HDR).json()
     assert page["customers"] == [] and page["next_cursor"] is None
+
+
+def test_unknown_segment_ids_do_not_grow_the_server_cache(data_dir, client):
+    from crm_api.segmentation import load_segmentation
+    write_fixture_segmentation(data_dir)
+    assert client.get("/v1/segmentation/customers?segment_id=1", headers=HDR).status_code == 200
+    data = load_segmentation(data_dir)
+    before = len(data._memo)
+    for sid in range(1000, 1020):                                        # ids that are not segments of this shop
+        r = client.get(f"/v1/segmentation/customers?segment_id={sid}", headers=HDR)
+        assert r.status_code == 200 and r.json() == {"total": 0, "customers": [], "next_cursor": None}
+    assert len(load_segmentation(data_dir)._memo) == before
