@@ -722,6 +722,42 @@ The pipeline architecture is designed for vertical expansion. The six-column inp
 
 Future work will examine: (1) real pilot deployment data from partner restaurant operators with 5% control groups; (2) online learning to update RFM and uplift models continuously; (3) multi-armed bandit formulations for campaign action selection; (4) Qini-curve-based uplift objective integration to replace the current net-margin floor with a continuous financial objective in the LightGBM training loss.
 
+### 7.6 Expected Production Performance
+
+The gap between model-estimated performance and realized production outcomes is a critical consideration for practitioners evaluating whether to deploy the framework. This section provides an honest, structured forecast grounded in the known limitations of each pipeline component.
+
+**What is expected to transfer reliably to production:**
+
+*Segmentation quality* — Layer 1 silhouette scores are computed on actual transaction data and reflect genuine cluster structure in the input distribution. Segment assignments will be consistent with the patterns observed across datasets. The dynamic k selection has demonstrated stable behavior across four structurally different datasets (k ∈ {2, 3}) and is unlikely to degrade on a new POS export from the same business vertical.
+
+*CFO Guardrail direction* — The fundamental logic is sound regardless of label quality: customers who purchase at high baseline frequency generate near-zero incremental revenue from a promotion while incurring its full cost. The guardrail's function of blocking these customers is expected to hold in production. The scaling pattern observed across datasets (guardrail savings grow with customer base size) is consistent with this mechanism.
+
+*broadcast_list.csv accuracy* — With a real CRM providing verified customer IDs, the join between pipeline decisions and the customer database will be exact, eliminating the proxy-matching approximations present in the public dataset evaluations.
+
+**What will likely transfer with attenuation:**
+
+*Uplift model rankings* — The current model is trained on observational or proxy labels, producing rankings that reflect purchase propensity rather than causally identified treatment response. In production, the model will continue to rank customers in the correct directional order — high-uplift customers will tend to respond more to campaigns than low-uplift customers — but the magnitude of the estimated uplift scores will likely be inflated relative to the true causal effect. Empirical evidence from the uplift modeling literature [12] suggests that observational uplift estimates typically overstate realized incremental lift by a factor of 1.5–3×.
+
+*Estimated incremental profit figures* — The model-estimated improvements reported in this paper (+257% on Dunnhumby, +2,622% on UK retail) should be treated as upper bounds rather than production expectations. A realistic range for the first deployment cycle, based on industry benchmarks for campaign personalization at comparable scales, is **+20–50% improvement in campaign ROI vs. naive broadcast**. This range accounts for: (a) attenuation from observational label bias; (b) real-world behavioral variance not captured by the model; and (c) novelty effects that inflate early campaign response rates before settling to steady state.
+
+**What requires real A/B data to determine:**
+
+| Question | Observable After |
+|----------|-----------------|
+| Does the guardrail prevent realized losses? | 1 campaign cycle (4–8 weeks) |
+| Does uplift ranking identify real responders? | 2–3 campaign cycles |
+| What is the true AUUC on causal labels? | 3–6 months (with 5% control group) |
+| At what n does guardrail value exceed deployment cost? | 6 months cross-site comparison |
+
+**Recommended production monitoring metrics:**
+
+- **Incremental Revenue Lift**: revenue of Treatment group minus revenue of Control group, normalized per customer — the primary causal KPI
+- **Campaign ROI**: (incremental revenue − promo cost) / promo cost — financial efficiency metric
+- **Guardrail Precision**: fraction of guardrail-blocked customers who would actually have generated negative incremental profit — validates suppression accuracy
+- **Uplift Rank Correlation**: Spearman correlation between predicted uplift rank and realized conversion rate by decile — tracks whether the model's ranking is causally predictive
+
+The forthcoming MVP field study with the CRM-integrated POS partner — incorporating a 20% randomized holdout control group and per-customer revenue attribution — will provide the first causally identified estimates for all four metrics above.
+
 ---
 
 ## 8. Conclusion
