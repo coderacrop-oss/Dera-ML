@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+src/__pycache__/
+venv/
+
+# Data (large files)
+data/dunnhumby/
+data/dunnhumby_transactions.csv
+data/olist_*.csv
+data/transactions.csv
+data/raw_pos_transactions*.csv
+data/marketing_campaign*.csv
+data/processed/
+data/stress_test/
+data/evaluation/
+data/*.DS_Store
+
+# Models
+models/registry/*.pkl
+models/archive/*.pkl
+
+# Output
+output/
+
+# Misc
+get-pip.py
+*.html
+*.pdf
