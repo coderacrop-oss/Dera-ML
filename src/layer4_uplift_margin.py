@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG, REGISTRY_PATH
+from peak_hours import write_peak_hours
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
     std_vol  = hourly_counts.std()
     peak_threshold = mean_vol + 0.5 * std_vol
     peak_hours_data = set(hourly_counts[hourly_counts > peak_threshold].index.tolist())
+    data_driven = len(peak_hours_data) > 0
 
     # Fallback to config if data has no spread (e.g. all same hour)
     if len(peak_hours_data) == 0:
@@ -218,6 +220,9 @@ def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
         print(f"ℹ️  [Layer 3] Peak hours: config fallback {sorted(peak_hours_data)}")
     else:
         print(f"ℹ️  [Layer 3] Peak hours (data-driven, threshold={peak_threshold:.0f} txns): {sorted(peak_hours_data)}")
+    # Persist the result so downstream steps (campaign_scheduler, CRM API) reuse it instead of recomputing.
+    write_peak_hours(peak_hours_data, set(hourly_counts.index.tolist()) - peak_hours_data, biz_tz,
+                     peak_threshold if data_driven else None, "data" if data_driven else "config_fallback")
 
     df['time_context'] = df['timestamp'].dt.hour.apply(
         lambda h: 'Peak' if h in peak_hours_data else 'Off-Peak'
