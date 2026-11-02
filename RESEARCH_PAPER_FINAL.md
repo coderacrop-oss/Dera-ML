@@ -2,7 +2,7 @@
 
 **Author:** เป็นหนึ่ง หงษ์โต
 **Affiliation:** Codera Solutions
-**Version:** Draft v1.14 — Confidential
+**Version:** Draft v1.15 — Confidential
 **Date:** November 2026
 **Status:** Working Paper — Internal Review
 
@@ -56,6 +56,9 @@ The primary contributions of this work are:
 - **Campaign automation scheduler:** A production scheduler (`campaign_scheduler.py`) implements a 3-wave monthly deployment strategy with 5% A/B holdout control group, per-customer `send_datetime` derived from detected peak windows, and templated messaging per action type — bridging Layer 4 decision outputs to CRM execution (Section 4.6).
 - **Empirical evaluation** on five datasets (synthetic F&B, marketing campaign, Dunnhumby grocery, UK online retail, and a purpose-built Layer 3 synthetic test dataset), including ablation study, cross-dataset baseline comparison, and multi-seed stability analysis (Section 6). AUUC on randomized labels: T-learner = 0.0612, X-learner = 0.0475 — both near-zero as expected for null treatment effect, validating calibration. Prior T-learner AUUC of 0.2351 was inflated by proxy label bias (Section 6.10.1).
 - A **Champion-Challenger protocol** adapted for SME environments with limited historical data (Section 4.4).
+- **Temporal-split proxy labels with leakage prevention (v1.15):** When no real treatment/response data exists, proxy labels are derived from transaction timestamps (temporal retention signal) with random treatment assignment, and model features are restricted to basket-level signals that do not overlap with label construction — eliminating the feature-label circularity present in earlier RFM-rank proxy designs (Section 4.4.1).
+- **Calibrated uplift probability estimates (v1.15):** Base learners μ₀ and μ₁ are wrapped with `CalibratedClassifierCV(isotonic, cv=3)`, reducing ECE by 87% (0.2496 → 0.0323) and producing reliable probability inputs to the CFO Guardrail profit formula (Section 4.4.1).
+- **Post-campaign feedback loop (v1.15):** `holdout_evaluator.py` ingests actual post-campaign outcomes, computes statistically-tested conversion lift with 95% confidence intervals, and exports retrain-ready labeled data compatible with Layer 4's real label mode — closing the measurement loop from campaign deployment through model retraining (Section 4.6).
 
 ---
 
@@ -282,7 +285,7 @@ Positive uplift indicates incremental expected purchase attributable to the camp
 
 1. **Real promotion response mode** (preferred): When `is_treated` and `post_promo_visit` columns are present in the POS file, the system uses these as treatment and conversion labels. When a `marketing_campaign.csv` file is additionally present with `AcceptedCmp1`–`AcceptedCmp5` and `Response` columns, three additional behavioral features are activated: `income`, `total_spend`, and `times_accepted`. Note that `AcceptedCmp` columns record whether a customer *accepted* a campaign offer — they are observational outcomes, not randomized treatment assignments. Uplift estimates from this source reflect self-selection bias and should be interpreted as directional signals rather than causal effects.
 
-2. **RFM proxy mode** (fallback): When no promotion response file is available — the common case for first-time SME deployments — treatment labels are derived from RFM decile rank (customers above the median decile are proxied as treated) and conversion labels from repeat purchase frequency. This mode introduces circularity: frequency contributes to both the treatment proxy and the outcome proxy. It should be interpreted strictly as a propensity-to-respond ranking, not as an uplift estimate. Upgrading to real label mode as promotion response data accumulates is the intended operational path.
+2. **Temporal-split proxy mode** (fallback): When no promotion response file is available — the common case for first-time SME deployments — the system constructs proxy labels from transaction timestamps rather than RFM rank. The observation window is split at the 75th percentile date: `converted = 1` if the customer transacted in the final 25% of the window (a temporal retention signal independent of RFM rank); `was_treated` is assigned by seeded random assignment (~40% treated). This design was adopted following an identified defect in an earlier RFM-based proxy (`was_treated = rfm_decile ≥ median`, `converted = frequency > 1`), where both label sources overlapped with model features `rfm_decile_segment` and `frequency`, producing circular training: the model learned to rank customers by RFM score rather than discover uplift signal. The temporal-split proxy eliminates this circularity: label construction uses only transaction dates, and model features are restricted to basket-level signals (`total_price`, `quantity`, `is_campaign_spike`) that do not participate in label derivation. Under random treatment assignment, the expected AUUC is approximately zero — the correct outcome when no causal treatment effect can be estimated without a real experiment. This conservative behaviour is intentional: the system should not manufacture uplift signal from observational data.
 
 The feature sets differ between modes:
 
@@ -291,13 +294,19 @@ The feature sets differ between modes:
 | `total_price` (AOV) | ✅ | ✅ |
 | `quantity` | ✅ | ✅ |
 | `is_campaign_spike` | ✅ | ✅ |
-| `rfm_decile_segment` | ✅ | ✅ |
-| `frequency` | ✅ | ✅ |
+| `rfm_decile_segment` | ❌ (excluded — leakage risk with temporal proxy) | ✅ |
+| `frequency` | ❌ (excluded — leakage risk with temporal proxy) | ✅ |
 | `income` | ❌ | ✅ |
 | `total_spend` | ❌ | ✅ |
 | `times_accepted` | ❌ | ✅ |
 
 A 5% holdout control group is preserved in every deployment cycle for ongoing A/B measurement of realized incremental lift. As real promotion response data accumulates through partner deployments, operators automatically transition from proxy mode to real label mode without pipeline reconfiguration.
+
+**Probability calibration:** Raw LightGBM `predict_proba()` output is known to produce uncalibrated scores — a predicted probability of 0.7 does not reliably correspond to a 70% observed event rate [35]. In the CFO Guardrail profit formula:
+
+$$\text{incremental} = \text{gross\_margin} \times (p_{\text{treated}} - p_{\text{baseline}}) - \text{promo\_cost}$$
+
+uncalibrated $p_{\text{baseline}}$ and $p_{\text{treated}}$ propagate directly into profit estimates. To address this, the base learners μ₀ and μ₁ are wrapped with `CalibratedClassifierCV(method='isotonic', cv=3)`, which fits an isotonic regression calibrator on out-of-fold predictions. Benchmarked Expected Calibration Error (ECE) on a held-out test set improved from 0.2496 to 0.0323 — an 87% reduction — confirming that calibrated probabilities reliably reflect the actual conversion base rate. The propensity model already applied isotonic calibration independently. The T-learner fallback (n < 50 per group) is left uncalibrated: with fewer than 50 samples, a three-fold cross-validation calibrator would be fit on fewer than 17 samples per fold, introducing more variance than it removes.
 
 #### 4.4.2 Dunnhumby Real-Data Training
 
@@ -474,6 +483,8 @@ Section 2 uses compact bullet-list format rather than subheadings to stay within
 
 Local inference ensures no customer transaction data is transmitted to external services, addressing data privacy requirements relevant to SME operators subject to regional data protection regulations.
 
+**Graceful degradation:** The `ollama` module is imported lazily inside `generate_campaign_action_plan()` rather than at module load time. If Ollama is not installed (`ImportError`) or the local inference server is not running (runtime exception), the function falls back to a deterministic template report that fills all real numbers from the payload — overview, per-segment strategy table, execution timeline, financial summary, and KPI checklist — without requiring LLM inference. This ensures the pipeline produces a complete, usable output on any deployment machine regardless of local hardware capability, with a clearly labelled notice indicating that AI narrative is unavailable and providing installation instructions. The LLM layer is therefore an optional enhancement rather than a hard dependency.
+
 ---
 
 ### 4.6 Layer 6 — Campaign Automation and Monthly Scheduling
@@ -490,6 +501,8 @@ Per-customer `send_datetime` is derived from the customer's detected `send_windo
 The **5% holdout mechanism** withholds a random control cohort from all campaign sends, selected by seeded random sampling for reproducibility. This true holdout group enables causal lift measurement via post-campaign transaction comparison without requiring a concurrent unpromoted segment — providing the causal ground truth needed to validate model-estimated incremental profit figures against realised revenue.
 
 Message templates are pre-rendered per action type and truncated to channel-specific character limits (SMS ≤160 characters; LINE ≤500; Email ≤2,000), incorporating offer descriptors, temporal urgency markers, and action-specific calls to action. Three output artefacts are generated: `campaign_schedule_YYYY-MM.csv` (customer-level send datetime, channel, message, expected profit), `ab_holdout_YYYY-MM.csv` (control cohort metadata), and `campaign_summary_YYYY-MM.json` (daily send cadence, wave distribution, projected profit aggregates). These artefacts feed directly into CRM and campaign execution platforms.
+
+**Post-campaign feedback loop:** A companion `holdout_evaluator.py` module closes the measurement loop by ingesting actual purchase outcomes after the campaign window closes. The operator provides `actual_outcomes_YYYY-MM.csv` (minimum columns: `customer_id`, `purchased`) exported from the POS system, and the evaluator joins it against the treatment and control groups to compute: (1) treatment vs. control conversion rates with 95% Wilson score confidence intervals; (2) absolute and relative incremental lift; (3) two-proportion z-test for statistical significance (with scipy fallback to normal approximation); (4) incremental revenue per customer vs. model-predicted profit per customer — a direct model accuracy diagnostic. The evaluator exports `outcomes_labeled_YYYY-MM.csv` containing `is_treated` and `post_promo_visit` columns derived from observed outcomes. This file is structurally compatible with Layer 4's real label mode: passing it as `promo_response_path` in the next pipeline cycle causes the uplift model to retrain on causally identified outcomes rather than proxy labels, completing the reinforcement loop from deployment → observation → retraining.
 
 ---
 
@@ -1058,6 +1071,14 @@ The pipeline architecture is designed for vertical expansion. The six-column inp
 **Evaluation on synthetic data:** Dataset 1 is synthetically generated from known segment parameters. The silhouette score (0.679) and k=2 selection reflect the generator's structure rather than discovering latent behavioral segments in real transaction data. Deterministic multi-seed convergence confirms the 200-customer dataset is too small for variance quantification. Evaluation on real pilot deployment data is the critical next step.
 
 **Uplift model AUUC on randomized labels:** Apples-to-apples AUUC evaluation on Dataset 1's actual randomized `is_treated` labels yields T-learner = 0.0612 and X-learner = 0.0475 — both near-zero, the statistically correct result when no true treatment effect exists. The previously-reported T-learner AUUC of 0.2351 was computed on proxy labels (`was_treated = rfm_decile_segment ≥ median`), which correlate with training features by construction and inflate apparent discriminative ability. The corrected values are reported in Section 6.10.1. AUUC on causally identified holdout data from a live A/B deployment remains the most informative evaluation and will be reported in the forthcoming field study.
+
+**Resolved: proxy label feature leakage (v1.15).** An earlier proxy label implementation derived `was_treated = rfm_decile ≥ median` and `converted = frequency > 1`, then used `rfm_decile_segment` and `frequency` as model input features — producing circular training. This was identified as a significant defect and corrected in v1.15: proxy labels now use a temporal-split design (converted = retention in final 25% of observation window; random treatment assignment), and proxy-mode features are restricted to basket-level signals that do not participate in label construction. UK retail proxy broadcast count corrected from 63 to 19; Δprofit corrected from $40,630 to $2,529. See Section 4.4.1.
+
+**Resolved: uncalibrated base learner probabilities (v1.15).** Raw LightGBM `predict_proba()` scores (ECE = 0.2496) were used directly in the profit formula, inflating or deflating incremental profit estimates proportionally. Fixed by wrapping μ₀ and μ₁ with `CalibratedClassifierCV(isotonic, cv=3)` (ECE = 0.0323, 87% reduction). See Section 4.4.1.
+
+**Resolved: LLM hard dependency (v1.15).** The `import ollama` statement at module level caused `ModuleNotFoundError` on machines without Ollama installed, crashing the entire pipeline at import time. Fixed by lazy import with a structured template fallback. See Section 4.5.
+
+**Remaining open: A/B holdout feedback loop now closed (v1.15).** The `holdout_evaluator.py` module now ingests post-campaign outcomes and exports retrain-ready labeled data. The remaining gap is that no real campaign has yet been deployed and measured — causal AUUC from a live holdout remains forthcoming.
 
 **Uplift evaluations in Datasets 1 and 2 rely on synthetic or no-control-group data:** Dataset 1 uses treatment labels generated by a synthetic simulator — treatment effect is by construction null, and AUUC correctly converges to near-zero. Dataset 2 (`marketing_campaign.csv`) has no control arm: all 2,240 households were contacted (`Z_CostContact = 3` uniformly), making it structurally impossible to train or evaluate uplift from this source alone. Uplift estimates on Dataset 2 reflect customer acceptance propensity, not incremental treatment effect. The Dunnhumby real-data retraining methodology (Section 4.4.2) directly addresses this limitation by providing a genuine natural treatment/control split (1,584 treated / 916 control) and doubly-robust evaluation to correct for the observed 4.7× pre-campaign spend differential between groups.
 
