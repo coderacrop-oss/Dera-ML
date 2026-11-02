@@ -21,55 +21,7 @@ from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifi
 
 sys.path.insert(0, os.path.dirname(__file__))
 from business_config import REGISTRY_PATH
-
-
-# ---------------------------------------------------------------------------
-# Qini / AUUC helpers (copied from compute_auuc.py)
-# ---------------------------------------------------------------------------
-
-def qini_curve(df, uplift_col="uplift_score", treatment_col="treatment",
-               outcome_col="outcome"):
-    """Compute Qini curve values. Returns (fractions, qini_values, random_values)."""
-    df = df.sort_values(uplift_col, ascending=False).reset_index(drop=True)
-    n = len(df)
-    N_T = df[treatment_col].sum()
-
-    qini_vals, random_vals = [0.0], [0.0]
-    cum_T_conv = 0
-    cum_C_conv = 0
-    cum_T = 0
-    cum_C = 0
-    fractions = [0.0]
-
-    for i, row in df.iterrows():
-        if row[treatment_col] == 1:
-            cum_T += 1
-            cum_T_conv += row[outcome_col]
-        else:
-            cum_C += 1
-            cum_C_conv += row[outcome_col]
-
-        frac = (i + 1) / n
-        fractions.append(frac)
-
-        if cum_T > 0 and N_T > 0:
-            qini = cum_T_conv - cum_C_conv * (cum_T / max(cum_C, 1))
-        else:
-            qini = 0.0
-        qini_vals.append(qini)
-
-        random_vals.append(frac * (df[outcome_col] * df[treatment_col]).sum())
-
-    return np.array(fractions), np.array(qini_vals), np.array(random_vals)
-
-
-def auuc_score(fractions, qini_vals, random_vals):
-    """AUUC = (area under Qini curve - area under random) / n, normalized."""
-    trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-    area_model = trapz(qini_vals, fractions)
-    area_random = trapz(random_vals, fractions)
-    n = len(fractions) - 1
-    return (area_model - area_random) / max(n, 1)
+from evaluate import UpliftEvaluator
 
 
 # ---------------------------------------------------------------------------
@@ -243,19 +195,10 @@ def main():
     r_cate = rlearner.effect(X_test).ravel()
     dr_cate = drlearner.effect(X_test).ravel()
 
-    # Build evaluation DataFrame for Qini/AUUC
-    eval_df = pd.DataFrame({
-        "treatment": T_test,
-        "outcome": Y_test,
-        "r_uplift": r_cate,
-        "dr_uplift": dr_cate,
-    })
-
-    fracs_r, q_r, q_rand_r = qini_curve(eval_df, uplift_col="r_uplift")
-    auuc_r = auuc_score(fracs_r, q_r, q_rand_r)
-
-    fracs_dr, q_dr, q_rand_dr = qini_curve(eval_df, uplift_col="dr_uplift")
-    auuc_dr = auuc_score(fracs_dr, q_dr, q_rand_dr)
+    # Evaluate AUUC via shared UpliftEvaluator
+    _ev = UpliftEvaluator(n_bootstrap=0)
+    auuc_r  = _ev.evaluate(r_cate,  T_test, Y_test).auuc
+    auuc_dr = _ev.evaluate(dr_cate, T_test, Y_test).auuc
 
     # --- Load X-Learner champion if available ---
     xlearner_auuc = None
@@ -287,9 +230,7 @@ def main():
                     x_cate = None
 
             if x_cate is not None:
-                eval_df["x_uplift"] = x_cate.ravel()
-                fracs_x, q_x, q_rand_x = qini_curve(eval_df, uplift_col="x_uplift")
-                xlearner_auuc = auuc_score(fracs_x, q_x, q_rand_x)
+                xlearner_auuc = _ev.evaluate(x_cate.ravel(), T_test, Y_test).auuc
                 print(f"      Loaded X-Learner champion from: {xlearner_pkl}")
             else:
                 print(f"      X-Learner feature mismatch (model={n_feat_x}, "

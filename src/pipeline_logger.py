@@ -14,14 +14,11 @@ Usage:
 """
 
 import json
-import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Resolve output path relative to this file so it works regardless of cwd
-_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SRC_DIR)
-_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "output")
-_AUDIT_FILE = os.path.join(_OUTPUT_DIR, "pipeline_audit.jsonl")
+_AUDIT_FILE = Path(__file__).parent.parent / "output" / "pipeline_audit.jsonl"
 
 _VALID_LEVELS = {"INFO", "WARN", "ERROR"}
 
@@ -46,7 +43,7 @@ def log(layer: str, event: str, level: str = "INFO", **data) -> None:
         "data":  data,
     }
 
-    os.makedirs(_OUTPUT_DIR, exist_ok=True)
+    _AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(_AUDIT_FILE, "a", encoding="utf-8") as fh:
+    with _AUDIT_FILE.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")

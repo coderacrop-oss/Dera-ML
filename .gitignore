@@ -11,3 +11,25 @@ venv/
 
 # OS
 .DS_Store
+
+# Large data files (>50MB)
+data/criteo_uplift.csv.gz
+data/dunnhumby_transactions.csv
+data/dunnhumby/transaction_data.csv
+data/dunnhumby/causal_data.csv
+data/dunnhumby/coupon.csv
+data/olist_geolocation_dataset.csv
+data/olist_order_reviews_dataset.csv
+data/olist_orders_dataset.csv
+data/olist_order_items_dataset.csv
+data/olist_order_payments_dataset.csv
+data/olist_customers_dataset.csv
+data/olist_products_dataset.csv
+data/olist_sellers_dataset.csv
+data/olist_transactions.csv
+data/transactions.csv
+data/x5_retailhero/purchases.csv.gz
+data/x5_retailhero/clients.csv.gz
+data/x5_retailhero/uplift_train.csv.gz
+models/
+output/

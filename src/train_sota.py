@@ -21,6 +21,8 @@ from sklearn.preprocessing import LabelEncoder
 
 sys.path.insert(0, os.path.dirname(__file__))
 from business_config import REGISTRY_PATH
+from evaluate import UpliftEvaluator
+from layer4_uplift_margin import XLearnerModel, _train_xlearner
 
 # ---------------------------------------------------------------------------
 # Optional torch import — DragonNet requires it
@@ -34,60 +36,9 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# ---------------------------------------------------------------------------
-# Qini / AUUC helpers (mirrors train_rlearner.py)
-# ---------------------------------------------------------------------------
-
-def qini_curve(df, uplift_col="uplift_score", treatment_col="treatment",
-               outcome_col="outcome"):
-    """Compute Qini curve values. Returns (fractions, qini_values, random_values)."""
-    df = df.sort_values(uplift_col, ascending=False).reset_index(drop=True)
-    n = len(df)
-    N_T = df[treatment_col].sum()
-
-    qini_vals, random_vals = [0.0], [0.0]
-    cum_T_conv = 0
-    cum_C_conv = 0
-    cum_T = 0
-    cum_C = 0
-    fractions = [0.0]
-
-    for i, row in df.iterrows():
-        if row[treatment_col] == 1:
-            cum_T += 1
-            cum_T_conv += row[outcome_col]
-        else:
-            cum_C += 1
-            cum_C_conv += row[outcome_col]
-
-        frac = (i + 1) / n
-        fractions.append(frac)
-
-        if cum_T > 0 and N_T > 0:
-            qini = cum_T_conv - cum_C_conv * (cum_T / max(cum_C, 1))
-        else:
-            qini = 0.0
-        qini_vals.append(qini)
-
-        random_vals.append(frac * (df[outcome_col] * df[treatment_col]).sum())
-
-    return np.array(fractions), np.array(qini_vals), np.array(random_vals)
-
-
-def auuc_score(fractions, qini_vals, random_vals):
-    """AUUC = (area under Qini curve - area under random) / n, normalized."""
-    trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-    area_model = trapz(qini_vals, fractions)
-    area_random = trapz(random_vals, fractions)
-    n = len(fractions) - 1
-    return (area_model - area_random) / max(n, 1)
-
-
 def compute_auuc_from_arrays(uplift: np.ndarray, T: np.ndarray, Y: np.ndarray) -> float:
-    """Convenience wrapper: compute AUUC from raw arrays."""
-    eval_df = pd.DataFrame({"uplift_score": uplift, "treatment": T, "outcome": Y})
-    fracs, q_vals, q_rand = qini_curve(eval_df, uplift_col="uplift_score")
-    return auuc_score(fracs, q_vals, q_rand)
+    """Compute AUUC from raw arrays via UpliftEvaluator."""
+    return UpliftEvaluator(n_bootstrap=0).evaluate(uplift, T, Y).auuc
 
 
 # ---------------------------------------------------------------------------
@@ -248,67 +199,28 @@ class DragonNetWrapper:
 
 class XLearnerWrapper:
     """
-    Thin adaptor that trains an X-Learner on numpy arrays (not DataFrames)
-    and exposes predict_uplift(X) -> np.ndarray.
+    Thin adaptor: shapes numpy arrays into DataFrames and delegates
+    to layer4_uplift_margin._train_xlearner, then wraps the returned
+    XLearnerModel.  Exposes predict_uplift(X) -> np.ndarray.
     """
 
     def __init__(self, n_estimators: int = 200):
         self.n_estimators = n_estimators
-        self._model = None
+        self._model: XLearnerModel | None = None
 
     def fit(self, X: np.ndarray, T: np.ndarray, Y: np.ndarray) -> "XLearnerWrapper":
-        import lightgbm as lgb
-        from sklearn.calibration import CalibratedClassifierCV
-
-        treat_idx = T == 1
-        ctrl_idx  = T == 0
-
-        X_tr, Y_tr = X[treat_idx], Y[treat_idx].astype(float)
-        X_ct, Y_ct = X[ctrl_idx],  Y[ctrl_idx].astype(float)
-
-        n_est = self.n_estimators
-
-        # Stage 1: outcome models
-        mu1 = lgb.LGBMRegressor(n_estimators=n_est, random_state=42, max_depth=4,
-                                  reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                                  colsample_bytree=0.8, verbose=-1)
-        mu0 = lgb.LGBMRegressor(n_estimators=n_est, random_state=42, max_depth=4,
-                                  reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                                  colsample_bytree=0.8, verbose=-1)
-        mu1.fit(X_tr, Y_tr)
-        mu0.fit(X_ct, Y_ct)
-
-        # Stage 2: imputed treatment effects
-        D1 = Y_tr - mu0.predict(X_tr)
-        D0 = mu1.predict(X_ct) - Y_ct
-
-        # Stage 3: CATE estimators
-        tau1 = lgb.LGBMRegressor(n_estimators=n_est, random_state=42, max_depth=4,
-                                   reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                                   colsample_bytree=0.8, verbose=-1)
-        tau0 = lgb.LGBMRegressor(n_estimators=n_est, random_state=42, max_depth=4,
-                                   reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                                   colsample_bytree=0.8, verbose=-1)
-        tau1.fit(X_tr, D1)
-        tau0.fit(X_ct, D0)
-
-        # Propensity model
-        _prop_base = lgb.LGBMClassifier(n_estimators=n_est, random_state=42,
-                                         reg_lambda=1.0, min_child_samples=20, subsample=0.8,
-                                         colsample_bytree=0.8, verbose=-1)
-        propensity = CalibratedClassifierCV(_prop_base, method="isotonic", cv=3)
-        propensity.fit(X, T)
-
-        self._mu0 = mu0
-        self._mu1 = mu1
-        self._tau0 = tau0
-        self._tau1 = tau1
-        self._propensity = propensity
+        feat_cols = [f"f{i}" for i in range(X.shape[1])]
+        df = pd.DataFrame(X, columns=feat_cols)
+        df["was_treated"] = T.astype(int)
+        df["converted"]   = Y.astype(int)
+        treat_df = df[df["was_treated"] == 1].copy()
+        ctrl_df  = df[df["was_treated"] == 0].copy()
+        self._model = _train_xlearner(treat_df, ctrl_df, feat_cols,
+                                      n_estimators=self.n_estimators)
         return self
 
     def predict_uplift(self, X: np.ndarray) -> np.ndarray:
-        e = np.clip(self._propensity.predict_proba(X)[:, 1], 0.05, 0.95)
-        return e * self._tau0.predict(X) + (1.0 - e) * self._tau1.predict(X)
+        return self._model.predict_uplift(X)
 
 
 # ---------------------------------------------------------------------------

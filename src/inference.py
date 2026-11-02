@@ -16,13 +16,6 @@ class UpliftInference:
     and SHAP-style counterfactual explanation.
     """
 
-    # Campaign type bands (by uplift percentile rank within the scored population)
-    _CAMPAIGN_TYPES = {
-        "top":  "bundle_discount",    # top decile
-        "mid":  "loyalty_points",     # mid decile (40th–90th pct)
-        "low":  "off_peak_discount",  # lower 40th pct
-    }
-
     def __init__(self, model, feature_names: list, business_config: dict = None):
         self.model = model
         self.feature_names = list(feature_names)
@@ -149,17 +142,17 @@ class UpliftInference:
         scored["recommend"] = targeted_mask
 
         # --- Campaign type from uplift percentile rank ---
-        # Percentile of each row's uplift within the full scored population
+        # Bands loaded from config; fallback keeps original behaviour.
+        bands = self.config.get("campaign_type_bands", {
+            0.90: "bundle_discount",
+            0.40: "loyalty_points",
+            0.00: "off_peak_discount",
+        })
         pct_rank = scored["uplift_score"].rank(pct=True)
-        campaign_type = np.where(
-            pct_rank >= 0.90,
-            self._CAMPAIGN_TYPES["top"],
-            np.where(
-                pct_rank >= 0.40,
-                self._CAMPAIGN_TYPES["mid"],
-                self._CAMPAIGN_TYPES["low"],
-            ),
-        )
+        # Apply thresholds high → low; last matching threshold wins.
+        campaign_type = np.full(len(scored), "", dtype=object)
+        for threshold in sorted(bands):
+            campaign_type = np.where(pct_rank >= threshold, bands[threshold], campaign_type)
         scored["campaign_type"] = campaign_type
 
         # --- ROI estimate ---
@@ -206,31 +199,29 @@ class UpliftInference:
                         n_targeted, total_cost
         """
         scored = self.score(X)
-        # Sort by uplift descending for greedy marginal gain
         scored = scored.sort_values("uplift_score", ascending=False).reset_index(drop=True)
         uplift_vals = scored["uplift_score"].values
         n_total = len(uplift_vals)
 
-        best_pct = 0.05
-        best_revenue = -np.inf
-        best_n = 0
-
         targeting_pcts = np.arange(0.05, 1.0 + 1e-9, 0.05)
-        for pct in targeting_pcts:
-            n = max(1, int(np.floor(n_total * pct)))
-            total_cost = n * cost_per_treatment
-            if total_cost > max_budget:
-                continue
-            top_uplift = uplift_vals[:n]
-            expected_revenue = (top_uplift * revenue_per_conversion).sum() - total_cost
-            if expected_revenue > best_revenue:
-                best_revenue = expected_revenue
-                best_pct = float(pct)
-                best_n = n
+        ns = np.maximum(1, np.floor(n_total * targeting_pcts).astype(int))
 
-        # Break-even lift: minimum average lift so that
-        #   n * avg_lift * revenue_per_conversion >= n * cost_per_treatment
-        # => avg_lift >= cost_per_treatment / revenue_per_conversion
+        # Vectorized cumulative revenue at each candidate n
+        cum_revenue = np.cumsum(uplift_vals * revenue_per_conversion)
+        total_costs = ns * cost_per_treatment
+        net_revenues = cum_revenue[ns - 1] - total_costs
+
+        # Mask out budget-busting candidates, then pick argmax
+        affordable = total_costs <= max_budget
+        if not affordable.any():
+            affordable[0] = True  # force cheapest option if nothing fits
+        net_revenues[~affordable] = -np.inf
+        best_idx = int(np.argmax(net_revenues))
+
+        best_pct = float(targeting_pcts[best_idx])
+        best_n   = int(ns[best_idx])
+        best_revenue = float(net_revenues[best_idx])
+
         break_even_lift = (
             cost_per_treatment / revenue_per_conversion
             if revenue_per_conversion > 0
@@ -239,7 +230,7 @@ class UpliftInference:
 
         return {
             "optimal_targeting_pct": round(best_pct, 4),
-            "expected_roi": round(float(best_revenue), 4),
+            "expected_roi": round(best_revenue, 4),
             "break_even_lift": round(break_even_lift, 6),
             "n_targeted": best_n,
             "total_cost": round(best_n * cost_per_treatment, 2),

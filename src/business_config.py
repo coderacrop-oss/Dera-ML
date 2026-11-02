@@ -48,6 +48,15 @@ CONFIG = {
     "spike_rfm_threshold":     7,     # RFM decile for campaign-spike guard
     "mid_rfm_threshold":       4,     # RFM decile for mid-tier off-peak eligibility
 
+    # === Campaign type bands (uplift percentile → promo type) ===
+    # Used by UpliftInference.target() to assign campaign actions.
+    # Keys are percentile thresholds (pct_rank >= key → value), ordered high → low.
+    "campaign_type_bands": {
+        0.90: "bundle_discount",    # top decile
+        0.40: "loyalty_points",     # mid (40th–90th pct)
+        0.00: "off_peak_discount",  # lower 40th pct
+    },
+
     # === Inventory estimation ===
     "stock_buffer_multiplier":   1.5,   # estimated stock covers this multiple of avg demand per cycle
     "low_stock_threshold":       5,     # remaining_stock ≤ this → out of stock

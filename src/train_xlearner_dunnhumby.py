@@ -17,6 +17,7 @@ from sklearn.model_selection import train_test_split
 sys.path.insert(0, os.path.dirname(__file__))
 from layer4_uplift_margin import XLearnerModel
 from business_config import REGISTRY_PATH
+from evaluate import UpliftEvaluator
 
 # ── 1. Load Dunnhumby data ───────────────────────────────────────────────────
 print("Loading Dunnhumby dataset (campaign_id=26)...")
@@ -106,86 +107,29 @@ print(f"\nUplift score range on test: [{uplift_scores.min():.4f}, {uplift_scores
 print(f"Mean uplift (ATE estimate) : {uplift_scores.mean():.4f}")
 
 # ── 6. Evaluation metrics ────────────────────────────────────────────────────
+_ev = UpliftEvaluator(n_bootstrap=0)
+std_auuc = _ev.evaluate(uplift_scores, T_test, Y_test).auuc
 
-# — Standard Qini curve / AUUC (copied from compute_auuc.py) ——————————————
-def qini_curve(uplift, treatment, outcome):
-    """Compute Qini curve. Returns (fractions, qini_vals, random_vals)."""
-    order = np.argsort(uplift)[::-1]
-    uplift    = uplift[order]
-    treatment = treatment[order]
-    outcome   = outcome[order]
-
-    n   = len(uplift)
-    N_T = treatment.sum()
-
-    fracs, qini_vals, rand_vals = [0.0], [0.0], [0.0]
-    cum_T_conv = cum_C_conv = cum_T = cum_C = 0
-    total_treat_conv = float((outcome * treatment).sum())
-
-    for i in range(n):
-        if treatment[i] == 1:
-            cum_T += 1
-            cum_T_conv += outcome[i]
-        else:
-            cum_C += 1
-            cum_C_conv += outcome[i]
-
-        frac = (i + 1) / n
-        fracs.append(frac)
-        qini = (cum_T_conv - cum_C_conv * (cum_T / max(cum_C, 1))
-                if cum_T > 0 else 0.0)
-        qini_vals.append(qini)
-        rand_vals.append(frac * total_treat_conv)
-
-    return np.array(fracs), np.array(qini_vals), np.array(rand_vals)
-
-
-def auuc_score(fracs, qini_vals, rand_vals):
-    """AUUC = (area under Qini - area under random) / n."""
-    trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-    area_model  = trapz(qini_vals,  fracs)
-    area_random = trapz(rand_vals,  fracs)
-    n = len(fracs) - 1
-    return (area_model - area_random) / max(n, 1)
-
-
-# — DR-AUUC (copied from compute_dr_auuc.py) ——————————————————————————————
-def dr_auuc_score(uplift, treatment, outcome, e_prop, mu0_hat, mu1_hat):
-    """
-    DR-AUUC via outcome transformation (Robins, Rotnitzky & Zhao 1994).
-    tau_dr_i = (Y - mu0) / e * T  -  (Y - mu1) / (1-e) * (1-T)  +  mu1 - mu0
-    """
+# DR-AUUC via outcome transformation (Robins, Rotnitzky & Zhao 1994)
+def _dr_auuc(uplift, treatment, outcome, e_prop, mu0_hat, mu1_hat):
     tau_dr = (
         (outcome - mu0_hat) / e_prop       * treatment
       - (outcome - mu1_hat) / (1 - e_prop) * (1 - treatment)
       + mu1_hat - mu0_hat
     )
-
-    order    = np.argsort(uplift)[::-1]
-    tau_dr   = tau_dr[order]
-    fracs    = np.arange(1, len(tau_dr) + 1) / len(tau_dr)
-    cum_dr   = np.cumsum(tau_dr)
+    order   = np.argsort(uplift)[::-1]
+    tau_dr  = tau_dr[order]
+    fracs   = np.arange(1, len(tau_dr) + 1) / len(tau_dr)
+    cum_dr  = np.cumsum(tau_dr)
     total_dr = tau_dr.sum()
-    rand_dr  = fracs * total_dr
+    fracs_f  = np.concatenate([[0.0], fracs])
+    cum_f    = np.concatenate([[0.0], cum_dr])
+    rand_f   = np.concatenate([[0.0], fracs * total_dr])
+    trapz    = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+    return (trapz(cum_f, fracs_f) - trapz(rand_f, fracs_f)) / max(len(tau_dr), 1)
 
-    fracs_f   = np.concatenate([[0.0], fracs])
-    cum_dr_f  = np.concatenate([[0.0], cum_dr])
-    rand_f    = np.concatenate([[0.0], rand_dr])
-
-    trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-    area_model  = trapz(cum_dr_f, fracs_f)
-    area_random = trapz(rand_f,   fracs_f)
-    return (area_model - area_random) / max(len(tau_dr), 1)
-
-
-# Compute metrics
-fracs, q_model, q_rand = qini_curve(uplift_scores, T_test, Y_test)
-std_auuc = auuc_score(fracs, q_model, q_rand)
-
-dr_auuc = dr_auuc_score(
-    uplift_scores, T_test, Y_test,
-    e_prop=e, mu0_hat=mu0_pred, mu1_hat=mu1_pred
-)
+dr_auuc = _dr_auuc(uplift_scores, T_test, Y_test,
+                   e_prop=e, mu0_hat=mu0_pred, mu1_hat=mu1_pred)
 
 # ── 7. Print results table ────────────────────────────────────────────────────
 print(f"""

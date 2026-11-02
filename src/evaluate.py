@@ -162,6 +162,21 @@ def _policy_value(
     return policy_value, random_value
 
 
+# ── Shared helpers ─────────────────────────────────────────────────────────────
+
+def _group_means(Y: np.ndarray, T: np.ndarray) -> Tuple[float, float]:
+    """Return (mean_treated, mean_control) for a slice; np.nan when group is empty."""
+    t_mask = T == 1
+    mu1 = Y[t_mask].mean() if t_mask.any() else np.nan
+    mu0 = Y[~t_mask].mean() if (~t_mask).any() else np.nan
+    return mu1, mu0
+
+
+def _safe_diff(a: float, b: float) -> float:
+    """a - b, or np.nan if either is nan."""
+    return (a - b) if (not np.isnan(a) and not np.isnan(b)) else np.nan
+
+
 # ── Calibration curve ──────────────────────────────────────────────────────────
 
 def _calibration_curve(
@@ -176,29 +191,18 @@ def _calibration_curve(
     (E[Y|T=1, bin] - E[Y|T=0, bin]).
     """
     order = np.argsort(uplift)
-    uplift_s = uplift[order]
-    T_s = T[order]
-    Y_s = Y[order]
-
-    bin_edges = np.array_split(np.arange(len(uplift)), n_bins)
-
+    uplift_s, T_s, Y_s = uplift[order], T[order], Y[order]
     rows = []
-    for b, idx in enumerate(bin_edges):
-        pred = uplift_s[idx].mean()
-        t_mask = T_s[idx] == 1
-        c_mask = T_s[idx] == 0
-        obs_t = Y_s[idx][t_mask].mean() if t_mask.sum() > 0 else np.nan
-        obs_c = Y_s[idx][c_mask].mean() if c_mask.sum() > 0 else np.nan
-        obs = (obs_t - obs_c) if (not np.isnan(obs_t) and not np.isnan(obs_c)) else np.nan
+    for b, idx in enumerate(np.array_split(np.arange(len(uplift)), n_bins)):
+        obs_t, obs_c = _group_means(Y_s[idx], T_s[idx])
         rows.append({
             "bin": b + 1,
-            "mean_uplift_pred": pred,
-            "mean_uplift_obs": obs,
+            "mean_uplift_pred": uplift_s[idx].mean(),
+            "mean_uplift_obs": _safe_diff(obs_t, obs_c),
             "n": len(idx),
-            "n_treated": int(t_mask.sum()),
-            "n_control": int(c_mask.sum()),
+            "n_treated": int((T_s[idx] == 1).sum()),
+            "n_control": int((T_s[idx] == 0).sum()),
         })
-
     return pd.DataFrame(rows)
 
 
@@ -216,32 +220,20 @@ def _decile_table(
     conversion_control, net_uplift.
     """
     order = np.argsort(uplift)[::-1]
-    uplift_s = uplift[order]
-    T_s = T[order]
-    Y_s = Y[order]
-
-    splits = np.array_split(np.arange(len(uplift)), n_deciles)
-
+    uplift_s, T_s, Y_s = uplift[order], T[order], Y[order]
     rows = []
-    for d, idx in enumerate(splits):
-        n = len(idx)
-        t_mask = T_s[idx] == 1
-        c_mask = T_s[idx] == 0
-        treatment_rate = t_mask.mean()
-        conv_t = Y_s[idx][t_mask].mean() if t_mask.sum() > 0 else np.nan
-        conv_c = Y_s[idx][c_mask].mean() if c_mask.sum() > 0 else np.nan
-        net_uplift = (conv_t - conv_c) if (not np.isnan(conv_t) and not np.isnan(conv_c)) else np.nan
-        mean_pred = uplift_s[idx].mean()
+    for d, idx in enumerate(np.array_split(np.arange(len(uplift)), n_deciles)):
+        conv_t, conv_c = _group_means(Y_s[idx], T_s[idx])
+        net = _safe_diff(conv_t, conv_c)
         rows.append({
             "decile": d + 1,
-            "n": n,
-            "mean_pred_uplift": round(mean_pred, 6),
-            "treatment_rate": round(treatment_rate, 4),
+            "n": len(idx),
+            "mean_pred_uplift": round(uplift_s[idx].mean(), 6),
+            "treatment_rate": round((T_s[idx] == 1).mean(), 4),
             "conversion_treated": round(conv_t, 4) if not np.isnan(conv_t) else np.nan,
             "conversion_control": round(conv_c, 4) if not np.isnan(conv_c) else np.nan,
-            "net_uplift": round(net_uplift, 4) if not np.isnan(net_uplift) else np.nan,
+            "net_uplift": round(net, 4) if not np.isnan(net) else np.nan,
         })
-
     return pd.DataFrame(rows)
 
 
@@ -290,15 +282,13 @@ def _build_summary(
 
     tau_str = f"{tau:.2f}" if not np.isnan(tau) else "N/A"
 
-    # Interpretation
-    if auuc > 0 and lo > 0:
-        interp = f"Model shows positive and statistically reliable signal. Safe to target top {pct_str}."
-    elif auuc > 0 and lo <= 0:
-        interp = f"Model shows positive but uncertain signal. Recommend targeting top {pct_str} only when CI lower bound > 0."
-    elif auuc <= 0 and hi > 0:
-        interp = "Model shows no reliable uplift. CI crosses zero — investigate feature quality or treatment mechanism."
-    else:
-        interp = "Model shows negative AUUC. Predicted rankings may be inversely correlated with true uplift."
+    _interp_map = {
+        (True,  True):  f"Model shows positive and statistically reliable signal. Safe to target top {pct_str}.",
+        (True,  False): f"Model shows positive but uncertain signal. Recommend targeting top {pct_str} only when CI lower bound > 0.",
+        (False, True):  "Model shows no reliable uplift. CI crosses zero — investigate feature quality or treatment mechanism.",
+        (False, False): "Model shows negative AUUC. Predicted rankings may be inversely correlated with true uplift.",
+    }
+    interp = _interp_map[auuc > 0, lo > 0 if auuc > 0 else hi > 0]
 
     return (
         f"AUUC: {auuc:+.4f} +/- {auuc_se:.4f} (95% CI: [{lo:+.4f}, {hi:+.4f}])\n"
@@ -367,8 +357,12 @@ class UpliftEvaluator:
             u_b, t_b, y_b = _stratified_resample(uplift, T, Y, rng)
             auuc_samples[i] = _compute_auuc(u_b, t_b, y_b)
 
-        ci = tuple(np.percentile(auuc_samples, [2.5, 97.5]))
-        auuc_se = float(auuc_samples.std(ddof=1))
+        if self.n_bootstrap > 0:
+            ci = tuple(np.percentile(auuc_samples, [2.5, 97.5]))
+            auuc_se = float(auuc_samples.std(ddof=1))
+        else:
+            ci = (float("nan"), float("nan"))
+            auuc_se = float("nan")
 
         # ── 3. Policy value ───────────────────────────────────────────────────
         policy_value, policy_value_random = _policy_value(uplift, T, Y, budget_pct)
