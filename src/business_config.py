@@ -1,6 +1,8 @@
 # =============================================================
 # Business Configuration — edit here to tune pipeline params
 # =============================================================
+import os as _os
+REGISTRY_PATH = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "models", "registry")
 
 CONFIG = {
     # === Identity ===

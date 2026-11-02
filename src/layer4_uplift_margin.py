@@ -8,7 +8,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
-from business_config import CONFIG
+from business_config import CONFIG, REGISTRY_PATH
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,9 +476,9 @@ def run_layer4(pos_file_path="data/transactions.csv",
     treat_data = raw_df[raw_df['was_treated'] == 1]
     ctrl_data  = raw_df[raw_df['was_treated'] == 0]
     
-    model_dir = "models/registry"
+    model_dir = REGISTRY_PATH
     os.makedirs(model_dir, exist_ok=True)
-    
+
     champion_path  = os.path.join(model_dir, "champion_xlearner.pkl")
     # Legacy T-learner paths kept for backward compatibility
     _legacy_treat  = os.path.join(model_dir, "champion_treat.pkl")
@@ -754,7 +754,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
     print("-------------------------------------------------------")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs("models/archive", exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(REGISTRY_PATH), "archive"), exist_ok=True)
 
     if is_passed:
         with open(champion_path, 'wb') as f: pickle.dump(challenger_model, f)
