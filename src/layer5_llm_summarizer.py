@@ -26,6 +26,14 @@ def _format_payload(payload: dict) -> str:
         lines.append(f"ลูกค้าทั้งหมด: {total_customers} คน")
     if total_transactions != "-":
         lines.append(f"ธุรกรรมทั้งหมด: {total_transactions} รายการ")
+
+    # Layer 4 broadcast summary (if available)
+    bcast = payload.get("broadcast_summary", {})
+    if bcast:
+        total_bc  = bcast.get("total_broadcast", "-")
+        total_sup = bcast.get("total_suppressed", "-")
+        sup_rate  = bcast.get("suppression_rate_pct", "-")
+        lines.append(f"⚡ Layer 4 Broadcast Summary: ส่งได้ {total_bc} คน | Suppressed {total_sup} คน ({sup_rate}% ถูก block โดย CFO guardrail)")
     lines.append("")
 
     # --- Segments ---
@@ -168,10 +176,13 @@ def generate_campaign_action_plan(payload: dict) -> str:
         "Use markdown formatting. Structure the report with exactly these 5 sections:\n\n"
 
         "## 1. สรุปภาพรวม\n"
-        "ประกอบด้วย: เดือนที่วางแผน, จำนวนลูกค้าและธุรกรรม, จำนวนกลุ่มเป้าหมาย, สถานะ validation gate\n\n"
+        "ประกอบด้วย: เดือนที่วางแผน, จำนวนลูกค้าและธุรกรรม, จำนวนกลุ่มเป้าหมาย, สถานะ validation gate "
+        "และ **Layer 4 Broadcast Summary** (⚡): จำนวนลูกค้าที่ผ่าน CFO guardrail ทั้งหมด vs ถูก suppress ทั้งหมด\n\n"
 
         "## 2. กลยุทธ์แคมเปญรายกลุ่ม\n"
-        "สำหรับแต่ละ segment ให้แสดง: ชื่อกลุ่ม, จำนวนลูกค้า, RFM (recency/frequency/AOV), "
+        "สำหรับแต่ละ segment ให้แสดง: ชื่อกลุ่ม, จำนวนลูกค้าทั้งหมดในกลุ่ม, "
+        "**Layer 4 Broadcast Breakdown** (ถ้ามีข้อมูล ⚡): จำนวนที่ผ่าน Layer 4 (ส่งได้) vs ถูก Suppress (ห้ามส่ง) พร้อม % suppression, "
+        "RFM (recency/frequency/AOV), "
         "ข้อเสนอโปรโมชั่น, ต้นทุนโปรโมชั่นต่อหัว (ถ้ามี), กำไรสุทธิต่อหัว, สถานะ margin, "
         "การแบ่ง A/B (ถ้ามี), กำไรรวมของกลุ่ม "
         "และ **เหตุผลเชิงธุรกิจ (Rationale)** ว่าทำไมกลุ่มนี้ถึงเหมาะกับข้อเสนอนี้ "
@@ -182,7 +193,8 @@ def generate_campaign_action_plan(payload: dict) -> str:
         "พร้อมบอกช่องทาง (Email / SMS) และกำหนดส่งที่แน่นอนจากข้อมูล\n\n"
 
         "## 4. ตารางสรุปการเงิน\n"
-        "แสดง markdown table เปรียบเทียบ: กลุ่ม | จำนวนลูกค้า | AOV | Net Profit/Head | Projected Profit | Margin Status\n"
+        "แสดง markdown table เปรียบเทียบ: กลุ่ม | จำนวนทั้งหมด | Broadcast (ส่งได้) | Suppressed (ห้ามส่ง) | AOV | Net Profit/Head | Projected Profit | Margin Status\n"
+        "- หากไม่มีข้อมูล Layer 4 ให้แสดงคอลัมน์ Broadcast และ Suppressed เป็น '-'\n"
         "ตามด้วย total projected profit ทุกกลุ่มรวมกัน (ดูจากฟิลด์ [REQUIRED])\n\n"
 
         "## 5. การคาดการณ์และเหตุผลประกอบ\n"
@@ -209,7 +221,7 @@ def generate_campaign_action_plan(payload: dict) -> str:
             options={
                 "temperature": 0.3,
                 "repeat_penalty": 1.1,
-                "num_predict": 5000,
+                "num_predict": 7000,
             },
         )
         output = ""
