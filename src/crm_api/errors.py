@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import re
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Path, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from . import docs
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -16,7 +18,7 @@ class ApiError(Exception):
         self.status, self.code, self.message = status, code, message
 
 
-def valid_month(month: str) -> str:
+def valid_month(month: str = Path(..., description=docs.P_MONTH)) -> str:
     """Path dependency: only YYYY-MM is accepted, so a month can never reach the filesystem as a path."""
     if not _MONTH_RE.fullmatch(month):
         raise ApiError(422, "invalid_month", "month must look like YYYY-MM (e.g. 2026-12)")

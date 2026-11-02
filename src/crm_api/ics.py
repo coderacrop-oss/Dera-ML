@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
+from . import docs
 from .auth import require_key_or_calendar_token
 from .errors import valid_month
 from .loaders import TZ, load_month
@@ -70,7 +71,7 @@ def render_calendar(month: str, events: list[dict], generated_at: datetime) -> s
     return "\r\n".join(_fold(l) for l in lines) + "\r\n"
 
 
-@router.get("/plans/{month}/calendar.ics", dependencies=[Depends(require_key_or_calendar_token)])
+@router.get("/plans/{month}/calendar.ics", dependencies=[Depends(require_key_or_calendar_token)], **docs.CALENDAR)
 def calendar_feed(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
     body = data.memo("ics", lambda: render_calendar(month, events_for(data), data.generated_at))

@@ -5,13 +5,14 @@ import hmac
 from fastapi import Request, Security
 from fastapi.security import APIKeyHeader, APIKeyQuery
 
+from . import docs
 from .errors import ApiError
 
 # Declared as FastAPI security schemes so /docs shows an "Authorize" button and /openapi.json documents them.
 # auto_error=False: we keep our own uniform 401 body.
-_header_key = APIKeyHeader(name="X-API-Key", auto_error=False, description="API key (env CRM_API_KEY)")
+_header_key = APIKeyHeader(name="X-API-Key", auto_error=False, description=docs.SEC_HEADER)
 _query_token = APIKeyQuery(name="token", auto_error=False,
-                           description="Read-only calendar token (env CRM_API_CALENDAR_TOKEN); calendar.ics only")
+                           description=docs.SEC_QUERY)
 
 
 def _eq(a: str, b: str) -> bool:

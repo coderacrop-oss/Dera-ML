@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pandas as pd
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 
+from . import docs
 from .errors import ApiError, valid_month
 from .loaders import load_month
 from .plans import _with_window, respond
@@ -10,7 +11,7 @@ from .plans import _with_window, respond
 router = APIRouter()
 
 
-@router.get("/plans/{month}/segments")
+@router.get("/plans/{month}/segments", **docs.SEGMENTS)
 def segments(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
     if data.segments is None:
@@ -34,7 +35,7 @@ def _build_promotions(data) -> list[dict]:
     return out
 
 
-@router.get("/plans/{month}/promotions")
+@router.get("/plans/{month}/promotions", **docs.PROMOTIONS)
 def promotions(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
     return respond(request, data, {"month": month, "promotions": data.memo("promotions", lambda: _build_promotions(data))})
@@ -56,8 +57,8 @@ def _index(data) -> dict:
     return data.memo("customers", lambda: _build_index(data))
 
 
-@router.get("/plans/{month}/customers/{customer_id}")
-def customer_offer(request: Request, customer_id: str, month: str = Depends(valid_month)):
+@router.get("/plans/{month}/customers/{customer_id}", **docs.CUSTOMER)
+def customer_offer(request: Request, customer_id: str = Path(..., description=docs.P_CUSTOMER), month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
     row = _index(data).get(customer_id)
     if row is None:  # holdout, suppressed and unknown customers all look the same on purpose

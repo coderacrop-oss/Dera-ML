@@ -9,6 +9,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 
+from . import docs
 from .errors import ApiError, valid_month
 from .loaders import MonthData, load_month
 
@@ -82,7 +83,7 @@ def events_for(data: MonthData) -> list[dict]:
     return data.memo("events", lambda: build_events(data.month, data.schedule))
 
 
-@router.get("/plans/{month}")
+@router.get("/plans/{month}", **docs.PLAN)
 def plan_summary(request: Request, month: str = Depends(valid_month)):
     data = load_month(request.app.state.settings.data_dir, month)
     s = data.schedule
@@ -103,10 +104,11 @@ def plan_summary(request: Request, month: str = Depends(valid_month)):
     return respond(request, data, body)
 
 
-@router.get("/plans/{month}/events")
+@router.get("/plans/{month}/events", **docs.EVENTS)
 def plan_events(request: Request, month: str = Depends(valid_month),
-                from_: date | None = Query(None, alias="from"), to: date | None = None,
-                wave: int | None = Query(None, ge=1, le=3)):
+                from_: date | None = Query(None, alias="from", description=docs.P_FROM),
+                to: date | None = Query(None, description=docs.P_TO),
+                wave: int | None = Query(None, ge=1, le=3, description=docs.P_WAVE)):
     if from_ and to and from_ > to:
         raise ApiError(422, "invalid_range", "'from' must not be after 'to'")
     data = load_month(request.app.state.settings.data_dir, month)
