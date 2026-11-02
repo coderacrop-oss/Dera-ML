@@ -13,7 +13,7 @@
 
 ## Abstract
 
-Small and medium enterprises (SMEs) in retail and food service routinely collect transactional data through point-of-sale (POS) systems yet rarely leverage it for marketing decisions, primarily due to resource constraints and the technical complexity of existing analytics solutions. This paper presents a five-layer MLOps pipeline — the **ML Campaign Engine** — that transforms raw POS transaction records requiring only six standard fields into financially validated, per-customer campaign action plans without requiring a dedicated data science team. The framework integrates RFM-based customer segmentation (K-means with dynamic cluster selection via silhouette scoring), market basket analysis (Apriori), dynamic context detection, uplift modeling (LightGBM), and a local large language model (LLM) reporting layer. A novel **CFO Guardrail** mechanism enforces a configurable minimum net margin floor prior to campaign dispatch, ensuring that no promotion is deployed at a financial loss regardless of predicted uplift score — an architectural contribution that embeds financial constraint validation directly into the ML decision loop. Layer 4 produces a per-customer `should_send` flag and exports a `broadcast_list.csv` ready for direct ingestion by automation tools (email, SMS, LINE OA), with per-segment approval counts surfaced in the Layer 5 executive report. COGS rate and discount rate are estimated automatically from data when sufficient transaction history is available, eliminating manual calibration for new deployments. The framework is evaluated on three datasets: (1) a synthetic restaurant POS dataset calibrated to F&B SME industry benchmarks (9,344 transaction line items, 200 customers, 6-month observation window; silhouette = 0.679; k = 2); (2) a public real-world marketing campaign dataset containing ground-truth promotion response labels (905 customers, aggregated spending records; silhouette = 0.347; k = 3); and (3) the Dunnhumby Complete Journey public grocery dataset (2,500 households, 2,576,815 transaction rows, 117-week observation window; silhouette = 0.595; k = 3; data-driven COGS = 62.9%, discount = 7.6%; 133/2,500 customers approved for broadcast after CFO guardrail filtering). A T-learner uplift model achieves an AUUC of 0.2351 on the synthetic dataset, outperforming random targeting at identifying high-responders. The CFO Guardrail prevents an estimated ฿2,695 in negative expected profit relative to an unguarded pipeline, demonstrating its role as the primary financial safety mechanism. Ablation analysis confirms that the CFO Guardrail is the primary mechanism preventing money-losing campaigns on this synthetic dataset: removing it reduces total expected profit by ฿2,695; removing the uplift model reduces it by ฿2,162; removing context detection has no material impact on the synthetic dataset. The full pipeline outperforms naive broadcast targeting by +0.3% in net incremental profit on the 200-customer synthetic dataset — a modest differential reflecting the dataset's small scale; the larger improvement (+฿3,496) vs. RFM-only targeting without an uplift model demonstrates the pipeline's value at this scale. Results demonstrate that the proposed framework is robust across F&B, retail, and large-scale grocery contexts, computationally accessible to SME hardware, and architecturally extensible to additional business verticals.
+Small and medium enterprises (SMEs) in retail and food service routinely collect transactional data through point-of-sale (POS) systems yet rarely leverage it for marketing decisions, primarily due to resource constraints and the technical complexity of existing analytics solutions. This paper presents a five-layer MLOps pipeline — the **ML Campaign Engine** — that transforms raw POS transaction records requiring only six standard fields into financially validated, per-customer campaign action plans without requiring a dedicated data science team. The framework integrates RFM-based customer segmentation (K-means with dynamic cluster selection via silhouette scoring), market basket analysis (Apriori), dynamic context detection, uplift modeling (LightGBM), and a local large language model (LLM) reporting layer. A novel **CFO Guardrail** mechanism enforces a configurable minimum net margin floor prior to campaign dispatch, ensuring that no promotion is deployed at a financial loss regardless of predicted uplift score — an architectural contribution that embeds financial constraint validation directly into the ML decision loop. Layer 4 produces a per-customer `should_send` flag and exports a `broadcast_list.csv` ready for direct ingestion by automation tools (email, SMS, LINE OA), with per-segment approval counts surfaced in the Layer 5 executive report. COGS rate and discount rate are estimated automatically from data when sufficient transaction history is available, eliminating manual calibration for new deployments. The framework is evaluated on three datasets: (1) a synthetic restaurant POS dataset calibrated to F&B SME industry benchmarks (9,344 transaction line items, 200 customers, 6-month observation window; silhouette = 0.679; k = 2); (2) a public real-world marketing campaign dataset containing ground-truth promotion response labels (905 customers, aggregated spending records; silhouette = 0.347; k = 3); and (3) the Dunnhumby Complete Journey public grocery dataset (2,500 households, 2,576,815 transaction rows, 117-week observation window; silhouette = 0.595; k = 3; data-driven COGS = 62.9%, discount = 7.6%; 133/2,500 customers approved for broadcast after all guardrail and action filters). A T-learner uplift model achieves an AUUC of 0.2351 on the synthetic dataset, outperforming random targeting at identifying high-responders. The CFO Guardrail prevents an estimated ฿2,695 in negative expected profit relative to an unguarded pipeline, demonstrating its role as the primary financial safety mechanism. Ablation analysis confirms that the CFO Guardrail is the primary mechanism preventing money-losing campaigns on this synthetic dataset: removing it reduces total expected profit by ฿2,695; removing the uplift model reduces it by ฿2,162; removing context detection has no material impact on the synthetic dataset. The full pipeline outperforms naive broadcast targeting by +0.3% in net incremental profit on the 200-customer synthetic dataset — a modest differential reflecting the dataset's small scale; the larger improvement (+฿3,496) vs. RFM-only targeting without an uplift model demonstrates the pipeline's value at this scale. Results demonstrate that the proposed framework is robust across F&B, retail, and large-scale grocery contexts, computationally accessible to SME hardware, and architecturally extensible to additional business verticals.
 
 **Keywords:** MLOps, SME marketing, uplift modeling, RFM segmentation, market basket analysis, campaign optimization, POS analytics, LightGBM, CFO guardrail, Champion-Challenger
 
@@ -128,7 +128,7 @@ POS Transaction CSV (6 columns)
             ┌─────────────────────────────────────┐
             │  Layer 5: LLM Executive Report      │
             │  llama3.2:3b (local, offline)       │
-            │  Streaming · 7,000 token budget     │
+            │  Streaming · 10,000 token budget    │
             └────────────────┬────────────────────┘
                              │
                              ▼
@@ -139,13 +139,11 @@ POS Transaction CSV (6 columns)
 
 *Figure 1. Five-layer ML Campaign Engine pipeline. Layer 4 produces two outputs: a broadcast list CSV for automation systems and an enriched segment payload for Layer 5.*
 
-The pipeline operates in three modes:
+The pipeline has a single production entry point:
 
 | Mode | Entry Point | Use Case |
 |------|-------------|----------|
-| In-memory | `pipeline_engine.py` | Real-time scoring, monthly re-tuning |
-| CSV-driven | `csv_pipeline_engine.py` | Batch processing, audit trail |
-| CFO Guardrail | `run_pipeline.py` | Financial compliance, executive reporting |
+| CSV-driven (production) | `csv_pipeline_engine.py` | Batch processing, audit trail, financial compliance, executive reporting |
 
 All business parameters — COGS rate, margin floor, discount rates, peak hours, timezone — are centralized in a single `business_config.py` file, enabling deployment across business types without code changes. When sufficient transaction history is available (≥10 distinct product types, ≥5 observations per type), COGS rate and discount rate are estimated automatically from data, overriding config defaults.
 
@@ -353,7 +351,7 @@ Both champion and challenger models are serialized with timestamps and retained 
 **Input:** Final campaign assignments and financial projections
 **Output:** Five-section plain-language executive summary
 
-We deploy `llama3.2:3b` locally via Ollama (temperature = 0.3; max 7,000 tokens; repeat_penalty = 1.1) with streaming output — tokens are printed to the terminal as they are generated, providing immediate feedback during the 60–90 second inference window. Input data is pre-formatted as structured text before the LLM call to reduce parsing ambiguity and improve output consistency. The generated report covers exactly five sections:
+We deploy `llama3.2:3b` locally via Ollama (temperature = 0.3; max 10,000 tokens; repeat_penalty = 1.1) with streaming output — tokens are printed to the terminal as they are generated, providing immediate feedback during the 60–90 second inference window. Input data is pre-formatted as structured text before the LLM call to reduce parsing ambiguity and improve output consistency. The generated report covers exactly five sections:
 
 1. **สรุปภาพรวม** — planning month, customer/transaction counts, segment count, gate status, Layer 4 broadcast summary (total approved vs. suppressed across all segments)
 2. **กลยุทธ์แคมเปญรายกลุ่ม** — per-segment bullet list including Layer 4 breakdown (`broadcast_count` / `suppressed_count` / suppression %), RFM metrics, offer, net profit/head, and business rationale referencing historical retention and repeat-purchase rates
@@ -466,6 +464,20 @@ The dynamic cluster selection procedure identified **k = 3** as optimal for the 
 **Total projected profit: $2,615,474 USD | Broadcast-only customers: 133 (5.3%) | Suppressed: 2,367 (94.7%)**
 
 The silhouette score of **0.595** is intermediate between the restaurant (0.679) and marketing campaign (0.347) datasets, reflecting that weekly grocery transactions produce moderately well-separated RFM clusters — tighter than aggregate-level data but less sharp than repeat-visit F&B behavior. The three-cluster solution correctly separates highly active Champions (recency 5.5 days, frequency 2,608 transactions) from the broad mid-tier and a small dormant At-Risk group (recency 325.2 days).
+
+The full Layer 4 decision breakdown across all 2,500 customers is:
+
+| Decision | Customers | % |
+|----------|-----------|---|
+| ⛔ Do Nothing (CFO Guardrail) | 1,626 | 65.0% |
+| ⛔ Do Nothing (Out of Stock) | 496 | 19.8% |
+| ⛔ Do Nothing (Low Basket Size) | 205 | 8.2% |
+| ✅ Push Promotion: Bundle | 76 | 3.0% |
+| ⛔ Do Nothing (Negative Uplift Guard) | 40 | 1.6% |
+| ✅ Off-Peak Special | 37 | 1.5% |
+| ✅ VIP Early Access | 19 | 0.8% |
+| ✅ VIP Reward: X2 Points | 1 | 0.0% |
+| **Total broadcast (should_send = 1)** | **133** | **5.3%** |
 
 The high suppression rate (94.7%) is primarily driven by `Do Nothing (CFO Guardrail)` (65.0%) and `Do Nothing (Out of Stock)` (19.8%) — consistent with the grocery context where a large fraction of customers have near-zero predicted incremental uplift above their baseline purchase propensity, and where the velocity-based stock estimator identifies fast-moving items as stock-limited. The adaptive basket thresholds (low = $2.24 / P10, mid = $3.03 / P50) correctly replaced the config default of $100, preventing all 2,500 customers from being blocked by `Do Nothing (Low Basket Size)`.
 
@@ -772,6 +784,6 @@ All business parameters are centralized in `src/business_config.py`. Operators a
 
 ---
 
-*End of Draft v1.1*
+*End of Draft v1.2*
 *Classification: Confidential — Proprietary Research*
 *© 2026 Codera Solutions · หนึ่ง หงษ์โต · All rights reserved*
