@@ -4,11 +4,123 @@ import lightgbm as lgb
 import os
 import pickle
 from datetime import datetime
-
-from layer1_valuation import run_layer1
-from layer2_bundling import run_layer2
-from layer3_context import run_layer3
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal Layer 1: RFM + K-Means
+# ─────────────────────────────────────────────────────────────────────────────
+def run_layer1(pos_file_path="data/raw_pos_transactions.csv"):
+    if not os.path.exists(pos_file_path):
+        print(f"❌ ไม่พบไฟล์ข้อมูล: {pos_file_path}")
+        return None
+    df = pd.read_csv(pos_file_path)
+    initial_rows = len(df)
+    df = df[df['total_price'] > 0].copy()
+    Q3 = df['total_price'].quantile(0.75)
+    IQR = Q3 - df['total_price'].quantile(0.25)
+    df_clean = df[df['total_price'] <= Q3 + 3.0 * IQR].copy()
+    filtered = initial_rows - len(df_clean)
+    if filtered > 0:
+        print(f"🧹 [Data Hygiene]: คัดกรองข้อมูลขยะและ Outliers ออกไป {filtered} รายการ")
+    now = pd.to_datetime(df_clean['timestamp']).max() + pd.Timedelta(days=1)
+    rfm = df_clean.groupby('customer_id').agg(
+        recency=('timestamp', lambda x: (now - pd.to_datetime(x).max()).days),
+        frequency=('transaction_id', 'count'),
+        monetary=('total_price', 'sum')
+    ).reset_index()
+    rfm['rfm_decile_segment'] = pd.qcut(
+        rfm['monetary'].rank(method='first'), 10, labels=False
+    ).astype(int) + 1
+    scaler = StandardScaler()
+    X = scaler.fit_transform(rfm[['recency', 'frequency', 'monetary']])
+    best_k, best_score = 2, -1
+    for k in range(2, min(6, len(rfm))):
+        score = silhouette_score(X, KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X))
+        if score > best_score:
+            best_score, best_k = score, k
+    rfm['kmeans_cluster'] = KMeans(n_clusters=best_k, random_state=42, n_init=10).fit_predict(X)
+    print(f"✅ [Layer 1 Valuation] K-Means cluster จริง: k={best_k} (Silhouette={best_score:.3f})")
+    os.makedirs("data/processed", exist_ok=True)
+    rfm.to_csv("data/processed/layer1_dual_valuation.csv", index=False)
+    return rfm
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal Layer 2: Market Basket Analysis
+# ─────────────────────────────────────────────────────────────────────────────
+def run_layer2(pos_file_path="data/raw_pos_transactions.csv"):
+    print("=== กำลังประมวลผล Layer 2: Preference & Bundling (Market Basket Analysis) ===")
+    df = pd.read_csv(pos_file_path)
+    top_products = df['product_name'].value_counts().head(150).index
+    df = df[df['product_name'].isin(top_products)]
+    n_inv = df['transaction_id'].nunique()
+    min_sup = 0.05 if n_inv > 5000 else (0.02 if n_inv > 1000 else 0.01)
+    basket = pd.crosstab(df['transaction_id'], df['product_name']).map(lambda x: 1 if x > 0 else 0)
+    freq = apriori(basket, min_support=min_sup, use_colnames=True)
+    if freq.empty:
+        print("คำเตือน: ไม่พบ Association Rules ที่ตรงตามเงื่อนไข")
+        return None
+    rules = association_rules(freq, metric="lift", min_threshold=1.0)
+    if rules.empty:
+        print("คำเตือน: ไม่พบ Association Rules ที่ตรงตามเงื่อนไข")
+        return None
+    rules = rules.sort_values('lift', ascending=False)
+    top = rules[['antecedents', 'consequents', 'support', 'confidence', 'lift']].head(3).copy()
+    top['antecedents'] = top['antecedents'].apply(lambda x: list(x)[0] if len(x) == 1 else str(x))
+    top['consequents'] = top['consequents'].apply(lambda x: list(x)[0] if len(x) == 1 else str(x))
+    os.makedirs("data/processed", exist_ok=True)
+    top.to_csv("data/processed/layer2_top_bundles.csv", index=False)
+    print(f"บันทึกคู่สินค้า Cross-Selling (Top 3 Bundles) สำเร็จ: data/processed/layer2_top_bundles.csv")
+    print("\n--- ตัวอย่าง Top 3 Product Bundles ---")
+    print(top)
+    return top
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal Layer 3: Context Detection (Peak/Off-peak + Inventory)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
+    print("=== กำลังประมวลผล Layer 3: Dynamic Context (Peak/Off-Peak & Inventory Check) ===")
+    df = pd.read_csv(pos_file_path)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+    bad = df['timestamp'].isna().sum()
+    if bad > 0:
+        print(f"⚠️ [Layer 3] timestamp แปลงไม่ได้ {bad} แถว — ข้ามแถวเหล่านั้น")
+        df = df.dropna(subset=['timestamp'])
+    biz_tz = CONFIG["business_tz"]
+    if df['timestamp'].dt.tz is None:
+        df['timestamp'] = df['timestamp'].dt.tz_localize(biz_tz, ambiguous='infer', nonexistent='shift_forward')
+    else:
+        df['timestamp'] = df['timestamp'].dt.tz_convert(biz_tz)
+    df['time_context'] = df['timestamp'].dt.hour.apply(
+        lambda h: 'Peak' if CONFIG["peak_hour_start"] <= h <= CONFIG["peak_hour_end"] else 'Off-Peak'
+    )
+    restock = CONFIG.get("stock_restock_cycle_days", 14)
+    n_days = max(1, (df['timestamp'].max() - df['timestamp'].min()).days)
+    total_qty = df.groupby('product_name')['quantity'].sum()
+    daily_rate = total_qty / n_days
+    initial_est = (daily_rate * restock * CONFIG["stock_buffer_multiplier"]).clip(lower=10).round().astype(int)
+    recent_cutoff = df['timestamp'].max() - pd.Timedelta(days=restock)
+    recent_qty = (
+        df[df['timestamp'] >= recent_cutoff].groupby('product_name')['quantity'].sum()
+        .reindex(total_qty.index, fill_value=0)
+    )
+    stock = total_qty.reset_index().rename(columns={'quantity': 'total_quantity'})
+    stock['initial_stock_est'] = initial_est.values
+    stock['recent_demand'] = recent_qty.values
+    stock['remaining_stock'] = (stock['initial_stock_est'] - stock['recent_demand']).clip(lower=0)
+    stock['in_stock'] = stock['remaining_stock'] > (stock['initial_stock_est'] * 0.20).clip(lower=CONFIG["low_stock_threshold"])
+    stock = stock.rename(columns={'total_quantity': 'quantity'})
+    context_df = df[['transaction_id', 'customer_id', 'product_name', 'timestamp', 'time_context']].drop_duplicates()
+    context_df = context_df.merge(stock[['product_name', 'remaining_stock', 'in_stock']], on='product_name', how='left')
+    os.makedirs("data/processed", exist_ok=True)
+    context_df.to_csv("data/processed/layer3_context_flags.csv", index=False)
+    return context_df
 
 def _normalize_to_pos_format(file_path: str) -> str:
     """
