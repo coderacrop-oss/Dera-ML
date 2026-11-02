@@ -28,6 +28,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,13 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+from atomic_io import atomic_write_text  # noqa: E402,F401  (re-exported)
+
+
+def stable_hash(s: str) -> int:
+    """Process-independent non-negative hash (Python's hash() is salted per run)."""
+    return int.from_bytes(hashlib.sha256(s.encode("utf-8")).digest()[:8], "big")
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -210,11 +218,11 @@ def build_schedule(
 
         candidate_weeks = wave_week_map.get(wave, [weeks[1]])
         # Pick week based on customer_id hash → consistent, spreadable
-        cid_hash = abs(hash(str(row["customer_id"]))) % len(candidate_weeks)
+        cid_hash = stable_hash(str(row["customer_id"])) % len(candidate_weeks)
         week_days = candidate_weeks[cid_hash]
 
         # Pick day within the week based on hash
-        day_idx = abs(hash(str(row["customer_id"]) + "day")) % len(week_days)
+        day_idx = stable_hash(str(row["customer_id"]) + "day") % len(week_days)
         send_day = week_days[day_idx]
         send_dt = send_day.replace(hour=hour, minute=0, second=0)
         send_datetimes.append(send_dt)
@@ -340,10 +348,9 @@ def main():
     holdout_path  = os.path.join(args.out_dir, f"ab_holdout_{args.month}.csv")
     summary_path  = os.path.join(args.out_dir, f"campaign_summary_{args.month}.json")
 
-    schedule_df.to_csv(schedule_path, index=False)
-    holdout_df.to_csv(holdout_path, index=False)
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    atomic_write_text(schedule_path, schedule_df.to_csv(index=False))
+    atomic_write_text(holdout_path, holdout_df.to_csv(index=False))
+    atomic_write_text(summary_path, json.dumps(summary, ensure_ascii=False, indent=2))
 
     # ── Print summary ──────────────────────────────────────────────────────
     print(f"\n{'='*60}")
