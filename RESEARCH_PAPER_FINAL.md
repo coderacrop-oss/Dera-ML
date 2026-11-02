@@ -2,7 +2,7 @@
 
 **Author:** หนึ่ง หงษ์โต
 **Affiliation:** Codera Solutions
-**Version:** Draft v1.10 — Confidential
+**Version:** Draft v1.11 — Confidential
 **Date:** November 2026
 **Status:** Working Paper — Internal Review
 
@@ -293,7 +293,33 @@ The feature sets differ between modes:
 
 A 5% holdout control group is preserved in every deployment cycle for ongoing A/B measurement of realized incremental lift. As real promotion response data accumulates through partner deployments, operators automatically transition from proxy mode to real label mode without pipeline reconfiguration.
 
-#### 4.4.2 Decision Rules
+#### 4.4.2 Dunnhumby Real-Data Training
+
+The Dunnhumby Complete Journey dataset was selected as the primary source for real-data uplift training because it is the only dataset in this evaluation with a genuine, naturally occurring treatment/control split. Of the 2,500 households in the dataset, 1,584 appear in `campaign_table` (treated) and 916 never received any campaign mailer across the full 711-day study window (control). This natural holdout structure enables a causal framing absent from the other datasets.
+
+**Why Dunnhumby and not marketing_campaign.csv:** The `marketing_campaign.csv` dataset (Dataset 2) contains no treatment/control split — `Z_CostContact = 3` for every row, indicating all 2,240 households were contacted in each campaign. `Response` records offer acceptance, not a contacted/not-contacted flag. Without a control arm, it is not possible to estimate individual treatment effects, and this dataset cannot be used for uplift training without an external holdout.
+
+**Feature engineering:** Nine pre-campaign behavioral features are computed from transaction history with a hard temporal cutoff at the day before each campaign's `START_DAY`, preventing any information leakage from the campaign period:
+
+| Feature | Definition |
+|---|---|
+| `recency_pre` | Days since last purchase before `START_DAY` |
+| `frequency_pre` | Unique basket days before `START_DAY` |
+| `monetary_pre` | Total spend before `START_DAY` |
+| `avg_basket_pre` | `monetary_pre` / `frequency_pre` |
+| `weekly_visit_rate` | `frequency_pre` / (`START_DAY` / 7) |
+| `coupon_sensitivity` | Mean coupon discount rate across pre-campaign transactions |
+| `private_label_ratio` | Share of pre-campaign spend on private-label products |
+| `top_department` | Ordinal-encoded highest-spend department |
+| `department_entropy` | Shannon entropy of spend distribution across departments |
+
+**Outcome definition:** The binary purchase indicator Y = 1 if the household made at least one purchase during the [START_DAY, END_DAY] campaign window, as specified in `campaign_desc.csv`. This outcome is available for all 2,500 households, including the 916 control households who shop during the same calendar window without having received a mailer.
+
+**Selection bias disclosure:** Treated households exhibit substantially higher pre-campaign spend than control households (treated mean: $2,032; control mean: $433; ratio ≈ 4.7×). This strong positive selection — high-value shoppers were preferentially targeted — means a naive uplift model will conflate "likely to buy regardless" with "responds to promotion." To correct for this, the propensity score e(x) = P(T=1 | X=x) is estimated from the same nine features, clipped to [0.1, 0.9] to prevent extreme inverse-probability weights, and the doubly-robust AUUC (DR-AUUC) is used as the primary evaluation metric in place of standard AUUC. DR-AUUC combines the direct model estimate with an inverse-propensity-weighted correction, providing consistent estimates of the causal ranking even under non-random treatment assignment [31].
+
+**Expected performance range:** Under proper doubly-robust evaluation, target AUUC is 0.60–0.68. Values above 0.70 without propensity correction likely indicate selection bias leakage — the model is ranking high-value shoppers rather than genuinely persuadable ones. The retrain run applying this methodology is currently pending (see Section 6.6 cross-dataset comparison).
+
+#### 4.4.3 Decision Rules
 
 Final action assignment integrates uplift score, RFM decile, AOV, and context flags through a priority-ordered rule set. AOV thresholds are applied adaptively: if the dataset median `avg_spent` falls below the configured `low_basket_threshold` (e.g. grocery datasets where per-transaction AOV is $2–5), thresholds are replaced by the P10 and P50 of actual `avg_spent` in the current dataset. This prevents all customers from receiving `Do Nothing (Low Basket Size)` on low-AOV datasets calibrated for wholesale.
 
@@ -315,7 +341,7 @@ $$\text{should\_send}_i = \mathbb{1}[\text{guardrail\_blocked}_i = 0 \;\wedge\; 
 
 This flag is the authoritative signal consumed by downstream automation systems. All "Do Nothing" variants — including CFO Guardrail, Low Basket Size, Out of Stock, and Negative Uplift Guard — produce `should_send = 0`, regardless of their guardrail_blocked value.
 
-#### 4.4.3 CFO Guardrail
+#### 4.4.4 CFO Guardrail
 
 Before finalizing any campaign assignment, two per-customer financial checks are applied:
 
@@ -341,7 +367,7 @@ Prior work on profit-driven uplift modeling [27, 28] has established the value o
 
 All financial parameters (`cogs_rate`, `min_allowable_net_margin`, `promo_cost_rates`) are configurable per business in `business_config.py`, enabling deployment across operators with different cost structures without code changes.
 
-#### 4.4.3b Broadcast List and Layer 4 → Layer 5 Integration
+#### 4.4.4b Broadcast List and Layer 4 → Layer 5 Integration
 
 Layer 4 produces two outputs consumed downstream:
 
@@ -357,7 +383,7 @@ This integration ensures that the Layer 5 executive report reflects only financi
 
 **Champion feature-count guard:** When loading a saved Champion model for comparison, the pipeline checks that the Champion's feature count matches the current dataset's feature set. If they differ — indicating the Champion was trained on a different dataset or label mode — the comparison is skipped and the Challenger is promoted as the first Champion for this context, with a logged warning.
 
-#### 4.4.4 Champion-Challenger Protocol
+#### 4.4.5 Champion-Challenger Protocol
 
 Model versioning follows a Champion-Challenger pattern. A challenger model (trained on the latest data) is automatically promoted to Champion production status if either condition holds:
 
@@ -660,6 +686,16 @@ The X-learner trained successfully with the RFM proxy label mode (no separate pr
 | Layer 4 Δprofit | ฿0 (X-learner) | $9,224 | $3,207 (X-learner) | **$40,630** |
 | Guardrail value saved† | ฿533 (prevents −฿533 no-guardrail scenario) | N/A | $3,469+ | **$39,454** |
 
+**Dunnhumby real-data retrain (pending):**
+
+| Metric | Dunnhumby (retrained) |
+|--------|----------------------|
+| Training methodology | Per-campaign X-learner; 9 pre-campaign features; propensity clipping [0.1, 0.9] |
+| Treatment / control | 1,584 treated / 916 control (natural holdout) |
+| Primary eval metric | DR-AUUC (doubly-robust correction for selection bias) |
+| Expected DR-AUUC | **0.60–0.68 (DR)** |
+| Status | **(pending retrain run)** |
+
 †*Model-estimated incremental profit (Δprofit = gross\_margin × uplift\_score − promo\_cost) computed on observational/proxy labels — not realized revenue from live deployment. See disclaimer in Section 6.10.3. Dataset 1 figures reflect X-learner with own randomized labels (is_treated + post_promo_visit, n\_estimators = 200); zero broadcast validates model calibration on null uplift. Dataset 2 figures reflect X-learner with companion file labels (AcceptedCmp + Response, corrected from prior RFM proxy). Dunnhumby figures reflect X-learner with own campaign labels (is_treated derived from campaign_table, n\_estimators = 200); T-learner baseline was 103 broadcast / $167.02 Δprofit.*
 
 The UK Online Retail dataset achieves the highest silhouette score (0.931) across all evaluations, driven by the extreme AOV gap between wholesale and retail buyers. Together, the four datasets validate the pipeline across synthetic F&B (controlled calibration validation), aggregate retail (medium scale with corrected companion labels), large-scale real grocery transaction data, and high-catalog-diversity e-commerce — demonstrating consistent behavior under config-default and data-driven rate modes.
@@ -894,6 +930,8 @@ The pipeline architecture is designed for vertical expansion. The six-column inp
 **Evaluation on synthetic data:** Dataset 1 is synthetically generated from known segment parameters. The silhouette score (0.679) and k=2 selection reflect the generator's structure rather than discovering latent behavioral segments in real transaction data. Deterministic multi-seed convergence confirms the 200-customer dataset is too small for variance quantification. Evaluation on real pilot deployment data is the critical next step.
 
 **Uplift model AUUC on randomized labels:** Apples-to-apples AUUC evaluation on Dataset 1's actual randomized `is_treated` labels yields T-learner = 0.0612 and X-learner = 0.0475 — both near-zero, the statistically correct result when no true treatment effect exists. The previously-reported T-learner AUUC of 0.2351 was computed on proxy labels (`was_treated = rfm_decile_segment ≥ median`), which correlate with training features by construction and inflate apparent discriminative ability. The corrected values are reported in Section 6.10.1. AUUC on causally identified holdout data from a live A/B deployment remains the most informative evaluation and will be reported in the forthcoming field study.
+
+**Uplift evaluations in Datasets 1 and 2 rely on synthetic or no-control-group data:** Dataset 1 uses treatment labels generated by a synthetic simulator — treatment effect is by construction null, and AUUC correctly converges to near-zero. Dataset 2 (`marketing_campaign.csv`) has no control arm: all 2,240 households were contacted (`Z_CostContact = 3` uniformly), making it structurally impossible to train or evaluate uplift from this source alone. Uplift estimates on Dataset 2 reflect customer acceptance propensity, not incremental treatment effect. The Dunnhumby real-data retraining methodology (Section 4.4.2) directly addresses this limitation by providing a genuine natural treatment/control split (1,584 treated / 916 control) and doubly-robust evaluation to correct for the observed 4.7× pre-campaign spend differential between groups.
 
 **Observational labels in Dataset 2:** Marketing campaign acceptance (`AcceptedCmp`) reflects customer self-selection, not randomized assignment. Uplift estimates from Dataset 2 are observational and subject to confounding. They should not be interpreted as causal effects.
 
