@@ -455,38 +455,82 @@ def run_layer4(pos_file_path="data/transactions.csv",
                 gate_reason = "ตลาดซบเซาแต่โมเดลใหม่ไม่เน้นเซฟงบ"
         else:
             gate_tgt = CONFIG["gate_growth_target_pct"]
-            if growth_pct < gate_tgt:
+            if abs(growth_pct) < 0.5:
+                # virtually identical — same data re-run
                 is_passed = False
-                gate_reason = f"อัตราการเติบโตต่ำกว่าเป้าหมาย ({growth_pct:+.2f}% < Target {gate_tgt:.1f}%)"
+                gate_reason = (
+                    f"โมเดลใหม่ให้ผลเท่าเดิม ({growth_pct:+.2f}%) — "
+                    f"น่าจะเทรนด้วยข้อมูลชุดเดิม ไม่มี signal ใหม่ คงโมเดลเก่าไว้"
+                )
+            elif growth_pct < 0:
+                is_passed = False
+                gate_reason = (
+                    f"โมเดลใหม่ประเมินกำไรได้ต่ำกว่าโมเดลเก่า {growth_pct:+.2f}% — "
+                    f"อาจเกิดจาก dataset คนละชุด (distribution shift) หรือโมเดลเก่า overoptimistic "
+                    f"คงโมเดลเก่าไว้ก่อน แนะนำ: reset champion ถ้าเปลี่ยน dataset ใหม่ทั้งหมด"
+                )
+            elif growth_pct < gate_tgt:
+                is_passed = False
+                gate_reason = (
+                    f"โมเดลใหม่ดีขึ้นเล็กน้อย {growth_pct:+.2f}% แต่ยังไม่ถึงเกณฑ์ {gate_tgt:.1f}% "
+                    f"ที่ตั้งไว้ — คงโมเดลเก่าไว้"
+                )
             else:
-                gate_reason = f"กำไรเติบโตผ่านเกณฑ์ปกติ ({growth_pct:+.2f}% >= Target {gate_tgt:.1f}%)"
+                is_passed = True
+                gate_reason = (
+                    f"โมเดลใหม่ดีกว่าโมเดลเก่า {growth_pct:+.2f}% ผ่านเกณฑ์ {gate_tgt:.1f}% — "
+                    f"อัปเดต champion"
+                )
+
+    # Calculate should_send early so action breakdown can use it
+    challenger_detail_df['should_send'] = (
+        (challenger_detail_df['guardrail_blocked'] == 0) &
+        (~challenger_detail_df['recommended_action'].str.startswith('Do Nothing'))
+    ).astype(int)
+
+    # --- Action breakdown summary ---
+    action_counts = challenger_detail_df['recommended_action'].value_counts()
+    send_count    = int(challenger_detail_df['should_send'].sum())
+    total_cust    = len(challenger_detail_df)
 
     print("\n=======================================================")
     print("      PRODUCTION MODEL VALIDATION GATE REPORT          ")
     print("=======================================================")
     if is_recession_mode:
-        print("⚠️ MARKET STATUS: RECESSION / LOW SPENDING MODE DETECTED")
+        print("⚠️  MARKET STATUS: RECESSION — ตลาดซบเซา ใช้กลยุทธ์ป้องกันขาดทุน")
     else:
-        print("🟢 MARKET STATUS: NORMAL / HIGH GROWTH MODE")
-        
+        print("🟢 MARKET STATUS: NORMAL — ตลาดปกติ โมดเติบโตได้")
+
     if has_champion:
-        print(f"กำไรประเมินโมเดลเก่า (Champion)   : {champion_profit:,.2f} บาท")
-        print(f"กำไรประเมินโมเดลใหม่ (Challenger) : {challenger_profit:,.2f} บาท")
-        print(f"อัตราการเติบโตของกำไร (Growth)    : {growth_pct:+.2f}%")
-        print(f"เหตุผลการตัดสินใจ (Decision)     : {gate_reason}")
+        diff = challenger_profit - champion_profit
+        print(f"\n📊 ผลประเมินโมเดล (บน {total_cust:,} ลูกค้า):")
+        print(f"   Champion (โมเดลเก่า) : {champion_profit:>12,.2f} บาท")
+        print(f"   Challenger (โมเดลใหม่): {challenger_profit:>12,.2f} บาท  ({growth_pct:+.2f}%)")
+        print(f"   ส่วนต่าง             : {diff:>+12,.2f} บาท")
+        print(f"\n💡 สรุป: {gate_reason}")
     else:
-        print(f"กำไรเริ่มต้น (Initial Model): {challenger_profit:,.2f} บาท")
+        print(f"\n📊 ไม่มีโมเดลเก่า — ใช้ผลประเมิน Challenger: {challenger_profit:,.2f} บาท")
+        print(f"💡 สรุป: บันทึกโมเดลนี้เป็น Champion ตัวแรก")
+
+    print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า):")
+    for action, cnt in action_counts.items():
+        pct = cnt / total_cust * 100
+        icon = "✅" if not action.startswith("Do Nothing") else "⛔"
+        print(f"   {icon} {action:<45} {cnt:>5,} คน ({pct:.1f}%)")
+
     print("-------------------------------------------------------")
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs("models/archive", exist_ok=True)
-    
+
     if is_passed:
         with open(champion_path_treat, 'wb') as f: pickle.dump(lgb_challenger_treat, f)
         with open(champion_path_ctrl, 'wb') as f: pickle.dump(lgb_challenger_ctrl, f)
-        print(f"🟢 [GATE PASSED]: อัปเดตโมเดลใหม่เป็น Champion สำเร็จ!")
+        print(f"🟢 GATE PASSED — อัปเดต Champion เรียบร้อย")
     else:
-        print(f"🔴 [GATE FAILED]: ปฏิเสธการอัปเดต คงใช้โมเดลเก่าต่อ")
+        print(f"🔴 GATE FAILED — คงใช้ Champion เดิม")
+        if has_champion and growth_pct < -5:
+            print(f"   ⚠️  หากเพิ่งเปลี่ยน dataset ใหม่ทั้งหมด ให้รัน: rm models/registry/champion_*.pkl แล้วรันใหม่")
 
     print("=======================================================\n")
     
@@ -495,11 +539,6 @@ def run_layer4(pos_file_path="data/transactions.csv",
     challenger_detail_df.to_csv(output_path, index=False)
 
     # Return per-customer detail df so caller can merge into segment plan
-    # should_send=0 if guardrail blocked OR action is any "Do Nothing" variant
-    challenger_detail_df['should_send'] = (
-        (challenger_detail_df['guardrail_blocked'] == 0) &
-        (~challenger_detail_df['recommended_action'].str.startswith('Do Nothing'))
-    ).astype(int)
     keep_cols = ['customer_id', 'recommended_action', 'expected_profit', 'guardrail_blocked', 'should_send']
     # Include cluster column if present
     if 'cluster' in challenger_detail_df.columns:
