@@ -194,9 +194,9 @@ def generate_campaign_action_plan(payload: dict) -> str:
         "พร้อมบอกช่องทาง (Email / SMS) และกำหนดส่งที่แน่นอนจากข้อมูล\n\n"
 
         "## 4. ตารางสรุปการเงิน\n"
-        "แสดง markdown table เปรียบเทียบ: กลุ่ม | จำนวนทั้งหมด | Broadcast (ส่งได้) | Suppressed (ห้ามส่ง) | AOV | Net Profit/Head | Projected Profit | Margin Status\n"
-        "- หากไม่มีข้อมูล Layer 4 ให้แสดงคอลัมน์ Broadcast และ Suppressed เป็น '-'\n"
-        "ตามด้วย total projected profit ทุกกลุ่มรวมกัน (ดูจากฟิลด์ [REQUIRED])\n\n"
+        "แสดง markdown table: กลุ่ม | ทั้งหมด | Broadcast | Suppressed | AOV | Profit/Head | Projected Profit | Margin\n"
+        "**ใช้ตัวเลขเท่านั้นในแต่ละ cell** เช่น '506' ไม่ใช่ '506 คน', '24' ไม่ใช่ 'ส่งได้ 24 คน'\n"
+        "ตามด้วยบรรทัดเดียว: **Total Projected Profit: X บาท** (ดูจากฟิลด์ [REQUIRED])\n\n"
 
         "## 5. การคาดการณ์และเหตุผลประกอบ\n"
         "แสดงผลที่คาดหวังพร้อม **เหตุผลประกอบ** ว่าทำไมถึงคาดการณ์ค่านั้น โดยอ้างอิงจาก:\n"
@@ -222,7 +222,7 @@ def generate_campaign_action_plan(payload: dict) -> str:
             options={
                 "temperature": 0.3,
                 "repeat_penalty": 1.1,
-                "num_predict": 7000,
+                "num_predict": 10000,
             },
         )
         output = ""
