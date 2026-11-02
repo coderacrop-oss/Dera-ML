@@ -205,8 +205,22 @@ def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
         df['timestamp'] = df['timestamp'].dt.tz_localize(biz_tz, ambiguous='infer', nonexistent='shift_forward')
     else:
         df['timestamp'] = df['timestamp'].dt.tz_convert(biz_tz)
+    # Data-driven peak detection: hours with transaction volume > mean + 0.5*std
+    hourly_counts = df['timestamp'].dt.hour.value_counts()
+    mean_vol = hourly_counts.mean()
+    std_vol  = hourly_counts.std()
+    peak_threshold = mean_vol + 0.5 * std_vol
+    peak_hours_data = set(hourly_counts[hourly_counts > peak_threshold].index.tolist())
+
+    # Fallback to config if data has no spread (e.g. all same hour)
+    if len(peak_hours_data) == 0:
+        peak_hours_data = set(range(CONFIG["peak_hour_start"], CONFIG["peak_hour_end"] + 1))
+        print(f"ℹ️  [Layer 3] Peak hours: config fallback {sorted(peak_hours_data)}")
+    else:
+        print(f"ℹ️  [Layer 3] Peak hours (data-driven, threshold={peak_threshold:.0f} txns): {sorted(peak_hours_data)}")
+
     df['time_context'] = df['timestamp'].dt.hour.apply(
-        lambda h: 'Peak' if CONFIG["peak_hour_start"] <= h <= CONFIG["peak_hour_end"] else 'Off-Peak'
+        lambda h: 'Peak' if h in peak_hours_data else 'Off-Peak'
     )
     restock = CONFIG.get("stock_restock_cycle_days", 14)
     n_days = max(1, (df['timestamp'].max() - df['timestamp'].min()).days)
@@ -315,7 +329,24 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
 
     # --- Format 1: raw_pos (transaction-level with is_treated + post_promo_visit) ---
     if 'is_treated' in df.columns and 'post_promo_visit' in df.columns:
-        df['customer_id'] = df['customer_id'].astype(str)
+        # Normalize customer_id column name (handle CustomerID, customer_id variants)
+        cid_map = {c: 'customer_id' for c in df.columns if c.lower() in ('customerid', 'customer_id')}
+        df = df.rename(columns=cid_map)
+        if 'customer_id' not in df.columns:
+            return None
+        # Normalize timestamp column
+        ts_map = {c: 'timestamp' for c in df.columns if c.lower() in ('invoicedate', 'timestamp', 'transaction_date')}
+        df = df.rename(columns=ts_map)
+        # Normalize total_price column
+        tp_map = {c: 'total_price' for c in df.columns
+                  if c.lower() in ('unitprice', 'total_price', 'amount') and 'total_price' not in df.columns}
+        df = df.rename(columns=tp_map)
+        if 'total_price' not in df.columns and 'quantity' in df.columns and 'UnitPrice' in df.columns:
+            df['total_price'] = df['quantity'] * df['UnitPrice']
+        # Normalize transaction_id
+        if 'transaction_id' not in df.columns:
+            df['transaction_id'] = df.index.astype(str)
+        df['customer_id'] = df['customer_id'].astype(float).astype(int).astype(str)
         # Optional columns — fill if missing
         if 'promo_applied' not in df.columns:
             df['promo_applied'] = df['is_treated']
@@ -553,7 +584,20 @@ def run_layer4(pos_file_path="data/transactions.csv",
         # rfm_decile_segment และ frequency มีใน cust_agg แล้ว — merge เฉพาะ columns ที่ยังขาด
         rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
         temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
-        temp_df = temp_df.merge(context_df[['customer_id', 'time_context', 'in_stock']].drop_duplicates('customer_id'), on='customer_id', how='left')
+        # Assign each customer their MAJORITY time_context (mode across all transactions)
+        # so a customer who buys 70% of the time during off-peak hours gets "Off-Peak"
+        customer_context = (
+            context_df.groupby('customer_id')['time_context']
+            .agg(lambda x: x.mode().iloc[0] if len(x) > 0 else 'Peak')
+            .reset_index()
+        )
+        customer_stock = (
+            context_df.groupby('customer_id')['in_stock']
+            .agg(lambda x: bool(x.any()))   # in_stock if ANY of their products is in stock
+            .reset_index()
+        )
+        customer_ctx = customer_context.merge(customer_stock, on='customer_id', how='left')
+        temp_df = temp_df.merge(customer_ctx, on='customer_id', how='left')
 
         PROMO_COST_RATES = CONFIG["promo_cost_rates"]
 
@@ -580,12 +624,14 @@ def run_layer4(pos_file_path="data/transactions.csv",
         MIN_MARGIN = CONFIG["min_allowable_net_margin"]
 
         def calculate_action_and_profit(row):
-            uplift    = float(row['uplift_score'])
-            prob_c    = float(row['prob_control'])
-            rfm_seg   = row['rfm_decile_segment']
-            in_stock  = row['in_stock']
-            avg_spent = float(row['avg_spent'])
-            is_spike  = float(row['is_campaign_spike'])
+            uplift       = float(row['uplift_score'])
+            prob_c       = float(row['prob_control'])
+            rfm_seg      = row['rfm_decile_segment']
+            in_stock     = row['in_stock']
+            avg_spent    = float(row['avg_spent'])
+            is_spike     = float(row['is_campaign_spike'])
+            time_context = row.get('time_context', 'Peak')   # "Peak" or "Off-Peak"
+            is_off_peak  = (time_context == 'Off-Peak')
 
             # Per-product COGS: look up customer's top product, fall back to dataset default
             top_prod  = row.get('top_product', '')
@@ -597,16 +643,16 @@ def run_layer4(pos_file_path="data/transactions.csv",
 
             # --- Do Nothing cases ---
             if pd.isna(in_stock) or not in_stock:
-                return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0])
+                return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
             if avg_spent < low_basket:
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
             if uplift < neg_uplift:
-                return pd.Series(["Do Nothing (Negative Uplift Guard)", baseline_profit, 0])
+                return pd.Series(["Do Nothing (Negative Uplift Guard)", baseline_profit, 0, time_context])
 
             # Helper: per-customer CFO Guardrail check
-            # Incremental profit = expected profit gain from sending promo vs not sending
-            # = gross_margin * (p_treated - p_baseline) - promo_cost
-            # If incremental_profit < 0 OR net_margin < floor → Do Nothing
+            # Incremental profit = gross_margin * (p_treated - p_baseline) - promo_cost
+            # Off-peak allows higher promo cost — justified by driving traffic to a quiet store.
+            # Peak uses lower cost — customers are already there, just retain/upsell lightly.
             def _guardrail_ok(promo_cost_rate):
                 promo_cost = avg_spent * promo_cost_rate
                 gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
@@ -615,52 +661,73 @@ def run_layer4(pos_file_path="data/transactions.csv",
                 incremental = gross_margin * (p_treated - p_baseline) - promo_cost
                 return net_margin >= MIN_MARGIN and incremental > 0, promo_cost
 
-            # --- Active campaign cases with per-customer guardrail ---
+            # --- Peak-aware send window (for broadcast_list.csv) ---
+            # Notify customer 30-60 min BEFORE their typical shopping window opens
+            send_window = "Off-Peak Window" if is_off_peak else "Peak Window"
+
+            # --- Active campaign cases with context-aware guardrail ---
+
+            # Festival spike — context-independent, always use festival rate
             if is_spike > 0.5 and rfm_seg >= spike_rfm:
                 ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["festival"])
                 if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
+                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
                 return pd.Series(["Standard Retention (Festival Guard)",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0])
+                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
-            if avg_spent < mid_basket and rfm_seg >= mid_rfm:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak"])
+            # Off-Peak customers: goal is to drive traffic when store is quiet
+            # Use aggressive traffic-driver discount (off_peak_traffic rate = 0.22)
+            # Action name reflects the business intent: pull them in during the quiet window
+            if is_off_peak and uplift > 0 and rfm_seg >= mid_rfm:
+                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_traffic"])
                 if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
-                return pd.Series(["Off-Peak Special: ส่วนลดกระตุ้นช่วงบ่าย",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0])
+                    # Too expensive even with off-peak intent → try lighter VIP points
+                    ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_vip"])
+                    if not ok:
+                        return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
+                    return pd.Series(["Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)",
+                                      round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+                return pd.Series(["Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
+                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
+            # Peak customers: already arriving → upsell/reward, lower cost
             if rfm_seg >= vip_rfm and prob_c > vip_prob:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["vip_points"])
+                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
+                                               else PROMO_COST_RATES["vip_points"])
                 if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
+                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
                 return pd.Series(["VIP Reward: แจกแต้ม X2",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0])
+                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
             if rfm_seg >= vip_rfm and rfm_seg >= 9:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["vip_points"])
+                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
+                                               else PROMO_COST_RATES["vip_points"])
                 if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
+                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
                 return pd.Series(["VIP Early Access",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0])
+                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
             if uplift > high_uplift:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["bundle"])
+                rate = PROMO_COST_RATES["peak_upsell"] if not is_off_peak else PROMO_COST_RATES["bundle"]
+                ok, promo_cost = _guardrail_ok(rate)
                 if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
+                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
                 return pd.Series([f"Push Promotion: {top_bundle_name}",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0])
+                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
-            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["standard"])
+            # Default: standard retention, peak uses cheaper rate
+            rate = PROMO_COST_RATES["standard"] if not is_off_peak else PROMO_COST_RATES["off_peak"]
+            ok, promo_cost = _guardrail_ok(rate)
             if not ok:
-                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1])
+                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
             return pd.Series(["Standard Retention",
-                              round(gross_margin * p_treated - promo_cost, 2), 0])
+                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
             
         res = temp_df.apply(calculate_action_and_profit, axis=1)
         temp_df['recommended_action'] = res[0]
         temp_df['expected_profit']    = res[1]
         temp_df['guardrail_blocked']  = res[2]
+        temp_df['send_window']        = res[3]
         temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
         return temp_df['expected_profit'].sum(), temp_df
 
@@ -790,10 +857,13 @@ def run_layer4(pos_file_path="data/transactions.csv",
     challenger_detail_df.to_csv(output_path, index=False)
 
     # Return per-customer detail df so caller can merge into segment plan
-    keep_cols = ['customer_id', 'recommended_action', 'expected_profit', 'guardrail_blocked', 'should_send']
-    # Include cluster column if present
+    keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
+                 'guardrail_blocked', 'should_send', 'send_window']
     if 'cluster' in challenger_detail_df.columns:
         keep_cols.insert(1, 'cluster')
+    # Guard: send_window may be missing if model was loaded from old checkpoint
+    if 'send_window' not in challenger_detail_df.columns:
+        challenger_detail_df['send_window'] = 'Peak Window'
     return challenger_detail_df[keep_cols]
 
 if __name__ == "__main__":

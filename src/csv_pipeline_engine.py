@@ -440,6 +440,11 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
         # Build broadcast rows for this segment
         send_date = pd.Timestamp("today").normalize() + pd.offsets.Week(weekday=4)  # next Friday
         for _, row in should_send.iterrows():
+            send_window = row.get("send_window", "Peak Window")
+            # send_time: 30 min before the target window opens
+            # Off-Peak customers → notify just before off-peak window so they plan to come
+            # Peak customers     → notify just before peak window as a reminder
+            send_time = "Before Off-Peak Window" if "Off-Peak" in str(send_window) else "Before Peak Window"
             broadcast_rows.append({
                 "customer_id":         row["customer_id"],
                 "segment_name":        seg["segment_name"],
@@ -447,6 +452,8 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
                 "offer":               seg.get("recommended_promo", "-"),
                 "expected_profit":     row["expected_profit"],
                 "send_date":           send_date.date(),
+                "send_window":         send_window,
+                "send_time_hint":      send_time,
                 "channel":             "Email/SMS",
                 "should_send":         1,
             })

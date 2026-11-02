@@ -16,12 +16,25 @@ CONFIG = {
     "control_group_rate":         0.05,   # A/B holdout split
 
     # === Promo cost rates (as % of AOV per action type) ===
+    # Off-peak rates are higher — justified because store is quiet and needs traffic.
+    # Peak rates are lower — customers are already coming, just retain/upsell.
     "promo_cost_rates": {
-        "vip_points": 0.02,   # Double-points reward
-        "bundle":     0.15,   # Bundle discount
-        "off_peak":   0.15,   # Off-peak discount
-        "festival":   0.05,   # Festival incentive
-        "standard":   0.05,   # Standard retention offer
+        "vip_points":         0.02,   # Double-points reward (peak)
+        "bundle":             0.15,   # Bundle discount (peak)
+        "off_peak":           0.15,   # Off-peak discount (legacy)
+        "festival":           0.05,   # Festival incentive
+        "standard":           0.05,   # Standard retention offer (peak)
+        # Context-aware rates
+        "off_peak_traffic":   0.22,   # Aggressive off-peak traffic driver — heavier discount ok
+        "peak_upsell":        0.08,   # Light touch during peak — customers already there
+        "off_peak_vip":       0.05,   # VIP points during off-peak — cheap way to pull them in
+    },
+
+    # === Send window: when to push the notification per context ===
+    # Format: "HH:MM" — send notification this many hours BEFORE the target window
+    "send_window": {
+        "off_peak": "pre_off_peak",   # send 30-60 min before off-peak window opens
+        "peak":     "pre_peak",       # send 30-60 min before peak window opens
     },
 
     # === Default campaign discount ===
