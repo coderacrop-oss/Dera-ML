@@ -285,7 +285,7 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
     Returns DataFrame with [customer_id, was_treated, converted, income,
     total_spend, times_accepted] or None if file is invalid.
     """
-    if not os.path.exists(promo_path):
+    if promo_path is None or not os.path.exists(promo_path):
         return None
     try:
         df = pd.read_csv(promo_path, sep=';')

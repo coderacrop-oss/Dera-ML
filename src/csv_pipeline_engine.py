@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import pandas as pd
 import numpy as np
@@ -33,7 +34,12 @@ def load_and_preprocess_csv(file_path):
     df = df.rename(columns={k: v for k, v in col_mapping.items()
                              if k in df.columns and v not in df.columns})
     df = df.dropna(subset=["customer_id", "transaction_date"])
-    df["customer_id"] = df["customer_id"].astype(str)
+    # Normalize customer_id: float-formatted IDs (e.g. 17850.0) → clean int string "17850"
+    # so they match layer4's _normalize_to_pos_format output.
+    try:
+        df["customer_id"] = df["customer_id"].astype(float).astype(int).astype(str)
+    except (ValueError, TypeError):
+        df["customer_id"] = df["customer_id"].astype(str).str.strip()
     df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors='coerce')
     
     if "quantity" in df.columns and "unit_price" in df.columns:
@@ -460,7 +466,25 @@ if __name__ == "__main__":
         validated_payload, product_cogs, default_cogs = layer3_and_4_processing(segments, df_raw, df_rfm)
 
         print("\n🔍 [Layer 4] รัน LightGBM Uplift + CFO Guardrail...")
-        layer4_df = run_layer4(pos_file_path=csv_file, product_cogs_dict=product_cogs, default_cogs=default_cogs)
+        # Resolve promo label source to prevent cross-dataset contamination when
+        # running from any working directory. Rules (in priority order):
+        # 1. POS file has its own treatment columns → use it directly (Format 1)
+        # 2. POS filename contains "marketing_campaign" → load companion
+        #    marketing_campaign.csv from the same directory (Format 2)
+        # 3. Otherwise → None (RFM proxy fallback)
+        _pos_abs = os.path.abspath(csv_file)
+        _pos_dir = os.path.dirname(_pos_abs)
+        _pos_name = os.path.basename(_pos_abs).lower()
+        _header = pd.read_csv(_pos_abs, nrows=0).columns.tolist()
+        if 'is_treated' in _header and 'post_promo_visit' in _header:
+            promo_path = _pos_abs
+        elif 'marketing_campaign' in _pos_name:
+            _candidate = os.path.join(_pos_dir, "marketing_campaign.csv")
+            promo_path = _candidate if os.path.exists(_candidate) else None
+        else:
+            promo_path = None
+        layer4_df = run_layer4(pos_file_path=csv_file, promo_response_path=promo_path,
+                               product_cogs_dict=product_cogs, default_cogs=default_cogs)
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
 
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")
