@@ -373,6 +373,7 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
             seg["suppressed_count"] = 0
             seg["suppression_rate"] = 0.0
             seg["l4_available"]     = False
+            total_broadcast += seg["customer_count"]
             updated_segments.append(seg)
             continue
 
