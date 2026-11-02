@@ -282,12 +282,16 @@ def run_layer4(pos_file_path="data/transactions.csv",
     lgb_challenger_treat.fit(treat_data[features], treat_data['converted'])
     lgb_challenger_ctrl.fit(ctrl_data[features], ctrl_data['converted'])
     
+    has_champion = False
     if os.path.exists(champion_path_treat) and os.path.exists(champion_path_ctrl):
         with open(champion_path_treat, 'rb') as f: lgb_champion_treat = pickle.load(f)
         with open(champion_path_ctrl, 'rb') as f: lgb_champion_ctrl = pickle.load(f)
-        has_champion = True
-    else:
-        has_champion = False
+        # Only use champion if it was trained on the same feature set
+        champ_n_features = lgb_champion_treat.n_features_
+        if champ_n_features == len(features):
+            has_champion = True
+        else:
+            print(f"⚠️  [Layer 4] Champion model has {champ_n_features} features but current data has {len(features)} — skipping champion comparison")
 
     def evaluate_model_profit(model_t, model_c):
         prob_t = model_t.predict_proba(cust_agg[features])[:, 1]
@@ -304,8 +308,19 @@ def run_layer4(pos_file_path="data/transactions.csv",
         COGS_RATE        = CONFIG["cogs_rate"]
         PROMO_COST_RATES = CONFIG["promo_cost_rates"]
 
-        low_basket   = CONFIG["low_basket_threshold"]
-        mid_basket   = CONFIG["mid_basket_threshold"]
+        # Data-adaptive basket thresholds: if dataset avg_spent is far below config
+        # threshold (e.g. grocery vs wholesale), scale down to P10/P50 of actual data
+        config_low = CONFIG["low_basket_threshold"]
+        config_mid = CONFIG["mid_basket_threshold"]
+        actual_p10 = float(temp_df['avg_spent'].quantile(0.10))
+        actual_p50 = float(temp_df['avg_spent'].quantile(0.50))
+        if actual_p50 < config_low:
+            low_basket = actual_p10
+            mid_basket = actual_p50
+            print(f"💡 [Layer 4] Adaptive thresholds: low_basket={low_basket:.2f} (P10), mid_basket={mid_basket:.2f} (P50) [dataset mean below config floor]")
+        else:
+            low_basket = config_low
+            mid_basket = config_mid
         neg_uplift   = CONFIG["negative_uplift_guard"]
         high_uplift  = CONFIG["high_uplift_threshold"]
         vip_rfm      = CONFIG["vip_rfm_threshold"]
@@ -478,6 +493,18 @@ def run_layer4(pos_file_path="data/transactions.csv",
     os.makedirs("data/processed", exist_ok=True)
     output_path = "data/processed/final_campaign_engine_output.csv"
     challenger_detail_df.to_csv(output_path, index=False)
+
+    # Return per-customer detail df so caller can merge into segment plan
+    # should_send=0 if guardrail blocked OR action is any "Do Nothing" variant
+    challenger_detail_df['should_send'] = (
+        (challenger_detail_df['guardrail_blocked'] == 0) &
+        (~challenger_detail_df['recommended_action'].str.startswith('Do Nothing'))
+    ).astype(int)
+    keep_cols = ['customer_id', 'recommended_action', 'expected_profit', 'guardrail_blocked', 'should_send']
+    # Include cluster column if present
+    if 'cluster' in challenger_detail_df.columns:
+        keep_cols.insert(1, 'cluster')
+    return challenger_detail_df[keep_cols]
 
 if __name__ == "__main__":
     run_layer4()

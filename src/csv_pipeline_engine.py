@@ -1,4 +1,5 @@
 import json
+import sys
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -330,18 +331,131 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
         "total_campaign_projected_profit": f"{total_profit:,.2f} บาท"
     }
 
+
+def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
+    """
+    Merge Layer 4 per-customer uplift decisions into segment plan.
+    Updates each segment with:
+      - broadcast_count:  customers Layer 4 approved to send (should_send=1)
+      - suppressed_count: customers blocked by CFO guardrail (should_send=0)
+      - suppression_rate: % ที่ถูก block
+      - l4_action_breakdown: สัดส่วน recommended_action ในกลุ่ม
+    Also exports broadcast_list.csv for automation tools.
+    """
+    import os
+    import pandas as pd
+
+    if layer4_df is None or layer4_df.empty:
+        return payload
+
+    # layer4_df has 'cluster' column — map to segment cluster_id
+    layer4_df = layer4_df.copy()
+    layer4_df['customer_id'] = layer4_df['customer_id'].astype(str)
+
+    # Attach cluster label from df_rfm if not already present
+    if 'cluster' not in layer4_df.columns and df_rfm is not None:
+        rfm_map = df_rfm[['customer_id', 'cluster']].copy()
+        rfm_map['customer_id'] = rfm_map['customer_id'].astype(str)
+        layer4_df = layer4_df.merge(rfm_map, on='customer_id', how='left')
+
+    updated_segments = []
+    broadcast_rows = []
+    total_suppressed = 0
+    total_broadcast = 0
+
+    for seg in payload["target_segments"]:
+        cluster_id = seg["cluster_id"]
+        seg_df = layer4_df[layer4_df['cluster'] == cluster_id]
+
+        if seg_df.empty:
+            # Layer 4 didn't cover this cluster — keep all customers
+            seg["broadcast_count"]  = seg["customer_count"]
+            seg["suppressed_count"] = 0
+            seg["suppression_rate"] = 0.0
+            seg["l4_available"]     = False
+            updated_segments.append(seg)
+            continue
+
+        should_send  = seg_df[seg_df['should_send'] == 1]
+        suppressed   = seg_df[seg_df['should_send'] == 0]
+        bc_count     = len(should_send)
+        sup_count    = len(suppressed)
+        sup_rate     = round(sup_count / len(seg_df) * 100, 1) if len(seg_df) > 0 else 0.0
+
+        # Action breakdown
+        action_counts = seg_df['recommended_action'].value_counts().to_dict()
+
+        # Recalculate projected profit using only broadcast customers' expected_profit
+        l4_total_profit = round(should_send['expected_profit'].sum(), 2)
+
+        seg["broadcast_count"]    = bc_count
+        seg["suppressed_count"]   = sup_count
+        seg["suppression_rate"]   = sup_rate
+        seg["l4_action_breakdown"] = action_counts
+        seg["l4_available"]       = True
+
+        # Override projected profit with Layer 4's more accurate estimate
+        seg["unit_economics"]["l4_total_projected_profit"] = l4_total_profit
+        seg["unit_economics"]["l4_profit_note"] = (
+            f"Layer 4 approved {bc_count}/{seg['customer_count']} customers "
+            f"({100-sup_rate:.0f}% of segment)"
+        )
+
+        total_broadcast  += bc_count
+        total_suppressed += sup_count
+
+        # Build broadcast rows for this segment
+        send_date = pd.Timestamp("today").normalize() + pd.offsets.Week(weekday=4)  # next Friday
+        for _, row in should_send.iterrows():
+            broadcast_rows.append({
+                "customer_id":         row["customer_id"],
+                "segment_name":        seg["segment_name"],
+                "recommended_action":  row["recommended_action"],
+                "offer":               seg.get("recommended_promo", "-"),
+                "expected_profit":     row["expected_profit"],
+                "send_date":           send_date.date(),
+                "channel":             "Email/SMS",
+                "should_send":         1,
+            })
+
+        updated_segments.append(seg)
+
+    payload["target_segments"] = updated_segments
+    payload["broadcast_summary"] = {
+        "total_broadcast": total_broadcast,
+        "total_suppressed": total_suppressed,
+        "suppression_rate_pct": round(total_suppressed / (total_broadcast + total_suppressed) * 100, 1)
+        if (total_broadcast + total_suppressed) > 0 else 0.0,
+    }
+
+    # Export broadcast list CSV
+    if broadcast_rows:
+        os.makedirs("data/processed", exist_ok=True)
+        broadcast_path = "data/processed/broadcast_list.csv"
+        pd.DataFrame(broadcast_rows).to_csv(broadcast_path, index=False)
+        print(f"📤 [Broadcast] Exported {total_broadcast} customers → {broadcast_path}")
+        print(f"🚫 [Broadcast] Suppressed {total_suppressed} customers (CFO guardrail / low uplift)")
+
+    return payload
+
 # ==========================================
 # Main Execution
 # ==========================================
 if __name__ == "__main__":
-    csv_file = "data/transactions.csv"
+    csv_file = sys.argv[1] if len(sys.argv) > 1 else "data/transactions.csv"
     print("🚀 เริ่มต้นรัน CSV MLOps Campaign Pipeline...\n")
     try:
+        from layer4_uplift_margin import run_layer4
+
         df_raw = load_and_preprocess_csv(csv_file)
         segments, df_rfm = layer1_csv_segmentation(df_raw)
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
         validated_payload = layer3_and_4_processing(segments, df_raw, df_rfm)
-        
+
+        print("\n🔍 [Layer 4] รัน LightGBM Uplift + CFO Guardrail...")
+        layer4_df = run_layer4(pos_file_path=csv_file)
+        validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
+
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")
         print("\n" + "="*50)
         final_plan = generate_campaign_action_plan(validated_payload)

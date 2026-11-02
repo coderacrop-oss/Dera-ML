@@ -46,7 +46,17 @@ def _format_payload(payload: dict) -> str:
         seg_name = seg.get('segment_name', '-')
         lines.append(f"--- [SEGMENT_NAME_EXACT: {seg_name}] (Cluster {seg.get('cluster_id', '-')}) ---")
         lines.append(f"⚠️ ใช้ชื่อกลุ่มนี้ตรงๆ ห้ามเปลี่ยน: {seg_name}")
-        lines.append(f"สัดส่วน: {seg.get('customer_share_percent', '-')} | จำนวน: {seg.get('customer_count', '-')} คน")
+        total_count    = seg.get('customer_count', '-')
+        broadcast_count = seg.get('broadcast_count')
+        suppressed_count = seg.get('suppressed_count')
+        if broadcast_count is not None:
+            lines.append(f"สัดส่วน: {seg.get('customer_share_percent', '-')} | จำนวนทั้งหมด: {total_count} คน")
+            lines.append(f"⚡ Layer 4 Approved (ส่งได้): {broadcast_count} คน | Suppressed (ห้ามส่ง): {suppressed_count} คน ({seg.get('suppression_rate', 0)}% ถูก block โดย CFO guardrail)")
+            l4_profit = seg.get('unit_economics', {}).get('l4_total_projected_profit')
+            if l4_profit is not None:
+                lines.append(f"⚡ L4 Projected Profit (เฉพาะคนที่ควรส่ง): ${_fmt_num(l4_profit)}")
+        else:
+            lines.append(f"สัดส่วน: {seg.get('customer_share_percent', '-')} | จำนวน: {total_count} คน")
         lines.append(f"RFM: ซื้อล่าสุด {seg.get('avg_recency_days', '-')} วัน | ความถี่ {seg.get('avg_frequency', '-')} ครั้ง | AOV ${_fmt_num(seg.get('avg_monetary'))}")
         if ab:
             lines.append(f"A/B Split: Treatment {ab.get('treatment_group_count')} คน / Control {ab.get('control_group_count')} คน")
