@@ -62,6 +62,17 @@ def write_fixture_month(dir_, month="2026-12", *, schedule_rows=None, segments=T
             "wave_weeks": {"1": [1, 3], "2": [2, 4], "3": [1]}}, ensure_ascii=False), encoding="utf-8")
 
 
+SEGMENT_NAMES = {0: "3. At-Risk / Churning", 1: "1. Champions & Loyal", 2: "2. Potential Loyalists"}
+
+
+def write_fixture_segmentation(dir_, n=12, *, extra_ids=("007", "00012")):
+    """customer_segments_latest.csv as the pipeline writes it: every customer of the shop with its segment."""
+    rows = [(f"C{i:03d}", i % 3) for i in range(n)] + [(cid, 1) for cid in extra_ids]
+    pd.DataFrame([dict(customer_id=c, segment_id=s, segment_name=SEGMENT_NAMES[s]) for c, s in rows]).to_csv(
+        dir_ / "customer_segments_latest.csv", index=False)
+    return rows
+
+
 @pytest.fixture
 def data_dir(tmp_path):
     write_fixture_month(tmp_path)

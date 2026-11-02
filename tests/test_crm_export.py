@@ -58,3 +58,26 @@ def test_export_segments_safe_never_raises(tmp_path):
     blocker.write_text("x")
     assert export_segments_safe(_payload(), str(blocker)) is None  # cannot mkdir under a file
     assert export_segments_safe(_payload(), str(tmp_path / "ok")).endswith("segments_latest.json")
+
+
+def test_write_customer_segments_writes_every_customer_with_its_segment_name(tmp_path):
+    import pandas as pd
+    from crm_export import write_customer_segments
+    df_rfm = pd.DataFrame({"customer_id": ["cust-0002", "007", "cust-0001"], "cluster": [1, 0, 1], "recency": [1, 2, 3]})
+    segments = [{"cluster_id": 0, "segment_name": "3. At-Risk"}, {"cluster_id": 1, "segment_name": "1. Champions"}]
+    path = write_customer_segments(df_rfm, segments, str(tmp_path))
+    assert path.endswith("customer_segments_latest.csv")
+    out = pd.read_csv(path, dtype=str)
+    assert list(out.columns) == ["customer_id", "segment_id", "segment_name"]       # no rfm numbers, no extras
+    assert out.customer_id.tolist() == ["007", "cust-0001", "cust-0002"]            # sorted, leading zeros kept
+    assert out.set_index("customer_id").segment_name.to_dict() == {"007": "3. At-Risk", "cust-0001": "1. Champions", "cust-0002": "1. Champions"}
+
+
+def test_export_customer_segments_safe_never_raises(tmp_path):
+    import pandas as pd
+    from crm_export import export_customer_segments_safe
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")
+    df = pd.DataFrame({"customer_id": ["a"], "cluster": [0]})
+    assert export_customer_segments_safe(df, [{"cluster_id": 0, "segment_name": "s"}], str(blocker)) is None
+    assert export_customer_segments_safe(object(), [], str(tmp_path / "ok")) is None      # garbage in -> still no exception

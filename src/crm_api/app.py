@@ -6,7 +6,7 @@ from . import docs
 from .auth import require_key
 from .errors import install_handlers
 from .loaders import list_months
-from . import catalog, ics, plans
+from . import catalog, ics, plans, segmentation
 from .settings import Settings
 
 
@@ -28,7 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def months():
         return {"months": list_months(settings.data_dir)}
 
-    for r in (plans.router, catalog.router):
+    for r in (plans.router, catalog.router, segmentation.router):
         app.include_router(r, prefix="/v1", dependencies=[Depends(require_key)], responses=ERRORS)
     app.include_router(ics.router, prefix="/v1", responses=ERRORS)  # own auth: key OR calendar token
     return app

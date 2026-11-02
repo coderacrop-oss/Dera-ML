@@ -11,7 +11,7 @@ from sklearn.metrics import silhouette_score
 from layer5_llm_summarizer import generate_campaign_action_plan
 from business_config import CONFIG
 from pipeline_logger import log
-from crm_export import export_segments_safe
+from crm_export import export_customer_segments_safe, export_segments_safe
 
 # ==========================================
 # Layer 0: CSV Data Loader & Preprocessing
@@ -503,6 +503,7 @@ if __name__ == "__main__":
         _t0 = time.monotonic()
         _rows_in = int(df_rfm["customer_id"].nunique())
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
+        export_customer_segments_safe(df_rfm, segments)  # customer -> segment, for the CRM API
         log("L2", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
             rows_in=_rows_in, rows_out=len(segments))
 

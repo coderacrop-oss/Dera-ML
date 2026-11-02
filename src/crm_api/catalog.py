@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import base64
 import bisect
-import json
 
 import pandas as pd
 from fastapi import APIRouter, Depends, Path, Query, Request
 
 from . import docs
+from .cursor import decode_cursor, encode_cursor
 from .errors import ApiError, valid_month
 from .loaders import load_month
 from .plans import _with_window, event_id, events_for, respond
@@ -90,21 +89,6 @@ def _build_event_index(data) -> dict:
     return out
 
 
-def _encode_cursor(eid: str, etag: str, after: str) -> str:
-    raw = json.dumps({"e": eid, "t": etag, "a": after}, ensure_ascii=False).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _decode_cursor(cursor: str) -> dict:
-    try:
-        doc = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode("utf-8"))
-        if not (isinstance(doc, dict) and all(isinstance(doc.get(k), str) for k in ("e", "t", "a"))):
-            raise ValueError("shape")
-        return doc
-    except Exception as exc:  # any malformed cursor
-        raise ApiError(422, "invalid_cursor", "cursor ไม่ถูกต้อง — ใช้ค่า next_cursor ที่ได้จากหน้าก่อนหน้าเท่านั้น") from exc
-
-
 @router.get("/plans/{month}/events/{event_id}/customers", responses={409: {"description": docs.ERR_409}},
             **docs.EVENT_CUSTOMERS)
 def event_customers(request: Request, event_id: str = Path(..., description=docs.P_EVENT_ID),
@@ -118,7 +102,7 @@ def event_customers(request: Request, event_id: str = Path(..., description=docs
     event, ids, rows = entry
     start = 0
     if cursor:
-        c = _decode_cursor(cursor)
+        c = decode_cursor(cursor)
         if c["e"] != event_id:
             raise ApiError(422, "invalid_cursor", "cursor นี้เป็นของนัดส่งอื่น")
         if c["t"] != data.etag:
@@ -130,6 +114,6 @@ def event_customers(request: Request, event_id: str = Path(..., description=docs
         "month": month, "event_id": event_id, "start": event["start"], "wave": event["wave"],
         "send_window": event["send_window"], "customer_count": event["customer_count"],
         "customers": page,
-        "next_cursor": _encode_cursor(event_id, data.etag, page[-1]["customer_id"]) if more and page else None,
+        "next_cursor": encode_cursor(event_id, data.etag, page[-1]["customer_id"]) if more and page else None,
     }
     return respond(request, data, body)
