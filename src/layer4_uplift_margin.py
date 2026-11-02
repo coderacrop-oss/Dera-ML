@@ -458,11 +458,16 @@ def run_layer4(pos_file_path="data/transactions.csv",
                          'income', 'total_spend', 'times_accepted']],
             on='customer_id', how='left'
         )
-        # fallback สำหรับลูกค้าที่ไม่มีใน marketing_campaign
-        raw_df['was_treated']    = raw_df['was_treated'].fillna(
-            (raw_df['rfm_decile_segment'] >= median_decile).astype(int))
-        raw_df['converted']      = raw_df['converted'].fillna(
-            (raw_df['frequency'] > 1).astype(int))
+        # fallback สำหรับลูกค้าที่ไม่มีใน real_labels:
+        # ใช้ temporal split แทน RFM proxy (ป้องกัน leakage)
+        _ts = pd.to_datetime(raw_df['timestamp'], errors='coerce')
+        _split = _ts.quantile(0.75)
+        _post_custs = set(raw_df.loc[_ts > _split, 'customer_id'].unique())
+        raw_df['_temporal_conv'] = raw_df['customer_id'].isin(_post_custs).astype(int)
+        # ลูกค้าที่ไม่อยู่ใน real_labels → ถือเป็น control (ไม่มีข้อมูลว่าถูก treat)
+        raw_df['was_treated'] = raw_df['was_treated'].fillna(0).astype(int)
+        raw_df['converted']   = raw_df['converted'].fillna(raw_df['_temporal_conv']).astype(int)
+        raw_df = raw_df.drop(columns=['_temporal_conv'])
         raw_df['income']         = raw_df['income'].fillna(0)
         raw_df['total_spend']    = raw_df['total_spend'].fillna(0)
         raw_df['times_accepted'] = raw_df['times_accepted'].fillna(0)
@@ -482,11 +487,52 @@ def run_layer4(pos_file_path="data/transactions.csv",
                     'rfm_decile_segment', 'frequency',
                     'income', 'total_spend', 'times_accepted'] + promo_dummy_cols
     else:
-        print("ℹ️  [Layer 4] ใช้ RFM proxy labels (ไม่พบ promo response file)")
-        raw_df['was_treated'] = (raw_df['rfm_decile_segment'] >= median_decile).astype(int)
-        raw_df['converted']   = (raw_df['frequency'] > 1).astype(int)
-        features = ['total_price', 'quantity', 'is_campaign_spike',
-                    'rfm_decile_segment', 'frequency']
+        # Temporal-split proxy: แทน RFM proxy เพื่อป้องกัน treatment leakage
+        # ────────────────────────────────────────────────────────────────────
+        # ปัญหาเดิม: was_treated = rfm_decile >= median และ converted = frequency > 1
+        # แล้วนำ rfm_decile_segment + frequency ไปเป็น feature ด้วย → โมเดล learn RFM rank
+        # ไม่ใช่ causal uplift จริง
+        #
+        # แนวทางใหม่:
+        # 1. converted = customer กลับมาซื้อในช่วง 25% สุดท้ายของ observation window
+        #    (temporal retention signal — ไม่เกี่ยวกับ RFM rank โดยตรง)
+        # 2. was_treated = random assignment seed=42 (ไม่มีข้อมูล treatment จริง →
+        #    random ทำให้ AUUC → 0 ซึ่งเป็นคำตอบที่ถูกต้องและ honest)
+        # 3. features: basket signals เท่านั้น (ไม่รวม rfm_decile_segment / frequency)
+        # ────────────────────────────────────────────────────────────────────
+        print("ℹ️  [Layer 4] Temporal-split proxy (ไม่พบ real promo labels) — ป้องกัน RFM leakage")
+
+        _ts = pd.to_datetime(raw_df['timestamp'], errors='coerce')
+        _split_date = _ts.quantile(0.75)
+
+        _pre  = raw_df[_ts <= _split_date].groupby('customer_id')['total_price'].count().rename('n_pre')
+        _post = raw_df[_ts >  _split_date].groupby('customer_id')['total_price'].count().rename('n_post')
+        _retention = _pre.to_frame().join(_post, how='outer').fillna(0).reset_index()
+        _retention['converted'] = (_retention['n_post'] > 0).astype(int)
+
+        # Random treatment: preserved rate ~40%, seeded สำหรับ reproducibility
+        _rng = np.random.default_rng(42)
+        _retention['was_treated'] = _rng.binomial(1, 0.4, len(_retention))
+
+        raw_df = raw_df.merge(
+            _retention[['customer_id', 'converted', 'was_treated']],
+            on='customer_id', how='left'
+        )
+        raw_df['was_treated'] = raw_df['was_treated'].fillna(0).astype(int)
+        raw_df['converted']   = raw_df['converted'].fillna(0).astype(int)
+
+        _n_cust  = raw_df['customer_id'].nunique()
+        _n_conv  = int(_retention['converted'].sum())
+        _n_treat = int(_retention['was_treated'].sum())
+        print(f"ℹ️  [Layer 4] split={_split_date.date()} | "
+              f"customers={_n_cust} | converted={_n_conv} ({_n_conv/_n_cust*100:.1f}%) | "
+              f"treated={_n_treat} ({_n_treat/_n_cust*100:.1f}%)")
+        print("⚠️  [Layer 4] Proxy mode: uplift scores = pseudo-CATE "
+              "(random treatment → AUUC ≈ 0 คือคำตอบที่ถูกต้อง)")
+
+        # ไม่รวม rfm_decile_segment / frequency ใน features —
+        # ตัวแปรเหล่านี้ยังคงอยู่ใน cust_agg เพื่อใช้ใน action rules แต่ไม่ใช่ ML input
+        features = ['total_price', 'quantity', 'is_campaign_spike']
 
     # --- Customer-level aggregation ---
     agg_dict = {
