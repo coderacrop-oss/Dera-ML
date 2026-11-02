@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 import os
+from sklearn.calibration import CalibratedClassifierCV
 import pickle
 from datetime import datetime
 from sklearn.cluster import KMeans
@@ -30,7 +31,7 @@ class XLearnerModel:
 
     def predict_uplift(self, X):
         """CATE estimate: e(x)·τ₀(x) + (1-e(x))·τ₁(x)"""
-        e = self.propensity.predict_proba(X)[:, 1]
+        e = np.clip(self.propensity.predict_proba(X)[:, 1], 0.05, 0.95)
         return e * self.tau0.predict(X) + (1 - e) * self.tau1.predict(X)
 
     def predict_control_proba(self, X):
@@ -66,17 +67,25 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
           f"features={len(features)}, n_estimators={n_estimators}")
 
     # Fallback to T-learner if either group is too small for X-learner stages
-    if n_treat < 10 or n_ctrl < 10:
+    if n_treat < 50 or n_ctrl < 50:
         print("⚠️  [X-learner] กลุ่มเล็กเกินไป — ใช้ T-learner แทน")
-        mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
-        mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+        mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                                  reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                                  colsample_bytree=0.8, verbose=-1)
+        mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                                  reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                                  colsample_bytree=0.8, verbose=-1)
         mu1.fit(treat_data[features], treat_data['converted'])
         mu0.fit(ctrl_data[features],  ctrl_data['converted'])
         return TLearnerModel(mu1, mu0)
 
     # Stage 1: Base learners (outcome models)
-    mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
-    mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+    mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                              colsample_bytree=0.8, verbose=-1)
+    mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                              colsample_bytree=0.8, verbose=-1)
     mu1.fit(treat_data[features], treat_data['converted'])
     mu0.fit(ctrl_data[features],  ctrl_data['converted'])
 
@@ -89,14 +98,21 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
           - ctrl_data['converted'].values.astype(float))
 
     # Stage 3: CATE estimators (regressors on imputed effects)
-    tau1 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, verbose=-1)
-    tau0 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, verbose=-1)
+    tau1 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, max_depth=4,
+                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                              colsample_bytree=0.8, verbose=-1)
+    tau0 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, max_depth=4,
+                              reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                              colsample_bytree=0.8, verbose=-1)
     tau1.fit(treat_data[features], D1)
     tau0.fit(ctrl_data[features],  D0)
 
     # Propensity model: P(T=1 | X) — weights τ₀ vs τ₁ by treatment probability
     all_data   = pd.concat([treat_data, ctrl_data], ignore_index=True)
-    propensity = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+    _prop_base = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
+                                    reg_lambda=1.0, min_child_samples=20, subsample=0.8,
+                                    colsample_bytree=0.8, verbose=-1)
+    propensity = CalibratedClassifierCV(_prop_base, method='isotonic', cv=3)
     propensity.fit(all_data[features], all_data['was_treated'])
 
     print("✅ [X-learner] Training complete (mu0, mu1, tau0, tau1, propensity)")
@@ -315,7 +331,7 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
             n_transactions   =('transaction_id',   'count'),
         ).reset_index()
         # แปลง conversion rate → binary: > median rate = converted
-        median_conv = cust.loc[cust['was_treated']==1, 'converted'].median()
+        median_conv = cust['converted'].median()  # full population, not treated-only
         cust['converted'] = (cust['converted'] > median_conv).astype(int)
         cust['income'] = 0.0   # ไม่มี income ใน raw_pos
 
@@ -448,6 +464,8 @@ def run_layer4(pos_file_path="data/transactions.csv",
         'is_campaign_spike':  'mean',
         'rfm_decile_segment': 'first',
         'frequency':          'first',
+        'was_treated':        'max',
+        'converted':          'max',
     }
     if use_real_labels:
         agg_dict['income']         = 'first'
@@ -460,7 +478,8 @@ def run_layer4(pos_file_path="data/transactions.csv",
     cust_agg = raw_df.groupby('customer_id').agg(agg_dict).reset_index()
 
     base_cols = ['customer_id', 'total_price', 'total_spent', 'quantity',
-                 'is_campaign_spike', 'rfm_decile_segment', 'frequency']
+                 'is_campaign_spike', 'rfm_decile_segment', 'frequency',
+                 'was_treated', 'converted']
     if use_real_labels:
         extra_cols = ['income', 'total_spend', 'times_accepted'] + \
                      [c for c in promo_dummy_cols if c in raw_df.columns]
