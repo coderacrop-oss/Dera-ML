@@ -12,6 +12,98 @@ from business_config import CONFIG
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Uplift Meta-learners
+# ─────────────────────────────────────────────────────────────────────────────
+
+class XLearnerModel:
+    """X-learner meta-learner (Künzel et al. 2019) for heterogeneous treatment effects.
+
+    Handles imbalanced treatment/control groups better than T-learner by imputing
+    counterfactual outcomes and learning CATE in two stages weighted by propensity.
+    """
+    def __init__(self, mu0, mu1, tau0, tau1, propensity):
+        self.mu0 = mu0              # P(Y=1 | T=0, X) — base learner on control
+        self.mu1 = mu1              # P(Y=1 | T=1, X) — base learner on treated
+        self.tau0 = tau0            # E[τ | X] estimated from control (regressor)
+        self.tau1 = tau1            # E[τ | X] estimated from treated (regressor)
+        self.propensity = propensity  # P(T=1 | X)
+
+    def predict_uplift(self, X):
+        """CATE estimate: e(x)·τ₀(x) + (1-e(x))·τ₁(x)"""
+        e = self.propensity.predict_proba(X)[:, 1]
+        return e * self.tau0.predict(X) + (1 - e) * self.tau1.predict(X)
+
+    def predict_control_proba(self, X):
+        return self.mu0.predict_proba(X)[:, 1]
+
+    @property
+    def n_features_(self):
+        return self.mu0.n_features_
+
+
+class TLearnerModel:
+    """Backward-compatible wrapper for legacy T-learner champion models."""
+    def __init__(self, model_t, model_c):
+        self.mu1 = model_t
+        self.mu0 = model_c
+
+    def predict_uplift(self, X):
+        return self.mu1.predict_proba(X)[:, 1] - self.mu0.predict_proba(X)[:, 1]
+
+    def predict_control_proba(self, X):
+        return self.mu0.predict_proba(X)[:, 1]
+
+    @property
+    def n_features_(self):
+        return self.mu0.n_features_
+
+
+def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
+    """Train X-learner meta-learner (5 LightGBM models total)."""
+    n_treat = len(treat_data)
+    n_ctrl  = len(ctrl_data)
+    print(f"🔬 [X-learner] Training — treated={n_treat:,}, control={n_ctrl:,}, "
+          f"features={len(features)}, n_estimators={n_estimators}")
+
+    # Fallback to T-learner if either group is too small for X-learner stages
+    if n_treat < 10 or n_ctrl < 10:
+        print("⚠️  [X-learner] กลุ่มเล็กเกินไป — ใช้ T-learner แทน")
+        mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+        mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+        mu1.fit(treat_data[features], treat_data['converted'])
+        mu0.fit(ctrl_data[features],  ctrl_data['converted'])
+        return TLearnerModel(mu1, mu0)
+
+    # Stage 1: Base learners (outcome models)
+    mu1 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+    mu0 = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+    mu1.fit(treat_data[features], treat_data['converted'])
+    mu0.fit(ctrl_data[features],  ctrl_data['converted'])
+
+    # Stage 2: Imputed treatment effects
+    # D1 = Y_i − μ₀(X_i) for treated  (actual − predicted counterfactual)
+    # D0 = μ₁(X_i) − Y_i for control  (predicted treated − actual)
+    D1 = (treat_data['converted'].values.astype(float)
+          - mu0.predict_proba(treat_data[features])[:, 1])
+    D0 = (mu1.predict_proba(ctrl_data[features])[:, 1]
+          - ctrl_data['converted'].values.astype(float))
+
+    # Stage 3: CATE estimators (regressors on imputed effects)
+    tau1 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, verbose=-1)
+    tau0 = lgb.LGBMRegressor(n_estimators=n_estimators, random_state=42, verbose=-1)
+    tau1.fit(treat_data[features], D1)
+    tau0.fit(ctrl_data[features],  D0)
+
+    # Propensity model: P(T=1 | X) — weights τ₀ vs τ₁ by treatment probability
+    all_data   = pd.concat([treat_data, ctrl_data], ignore_index=True)
+    propensity = lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42, verbose=-1)
+    propensity.fit(all_data[features], all_data['was_treated'])
+
+    print("✅ [X-learner] Training complete (mu0, mu1, tau0, tau1, propensity)")
+    return XLearnerModel(mu0, mu1, tau0, tau1, propensity)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Internal Layer 1: RFM + K-Means
 # ─────────────────────────────────────────────────────────────────────────────
 def run_layer1(pos_file_path="data/raw_pos_transactions.csv"):
@@ -387,25 +479,35 @@ def run_layer4(pos_file_path="data/transactions.csv",
     model_dir = "models/registry"
     os.makedirs(model_dir, exist_ok=True)
     
-    champion_path_treat = os.path.join(model_dir, "champion_treat.pkl")
-    champion_path_ctrl = os.path.join(model_dir, "champion_ctrl.pkl")
-    
-    print("🚀 กำลังเทรนโมเดลใหม่ (Challenger Model)...")
-    lgb_challenger_treat = lgb.LGBMClassifier(n_estimators=30, random_state=42, verbose=-1)
-    lgb_challenger_ctrl = lgb.LGBMClassifier(n_estimators=30, random_state=42, verbose=-1)
-    lgb_challenger_treat.fit(treat_data[features], treat_data['converted'])
-    lgb_challenger_ctrl.fit(ctrl_data[features], ctrl_data['converted'])
-    
-    has_champion = False
-    if os.path.exists(champion_path_treat) and os.path.exists(champion_path_ctrl):
-        with open(champion_path_treat, 'rb') as f: lgb_champion_treat = pickle.load(f)
-        with open(champion_path_ctrl, 'rb') as f: lgb_champion_ctrl = pickle.load(f)
-        # Only use champion if it was trained on the same feature set
-        champ_n_features = lgb_champion_treat.n_features_
-        if champ_n_features == len(features):
+    champion_path  = os.path.join(model_dir, "champion_xlearner.pkl")
+    # Legacy T-learner paths kept for backward compatibility
+    _legacy_treat  = os.path.join(model_dir, "champion_treat.pkl")
+    _legacy_ctrl   = os.path.join(model_dir, "champion_ctrl.pkl")
+
+    print("🚀 กำลังเทรนโมเดลใหม่ด้วย X-learner (Challenger Model)...")
+    challenger_model = _train_xlearner(treat_data, ctrl_data, features)
+
+    has_champion  = False
+    champion_model = None
+    if os.path.exists(champion_path):
+        with open(champion_path, 'rb') as f:
+            champion_model = pickle.load(f)
+        if champion_model.n_features_ == len(features):
             has_champion = True
         else:
-            print(f"⚠️  [Layer 4] Champion model has {champ_n_features} features but current data has {len(features)} — skipping champion comparison")
+            print(f"⚠️  [Layer 4] Champion model has {champion_model.n_features_} features "
+                  f"but current data has {len(features)} — skipping champion comparison")
+            champion_model = None
+    elif os.path.exists(_legacy_treat) and os.path.exists(_legacy_ctrl):
+        with open(_legacy_treat, 'rb') as f: _lt = pickle.load(f)
+        with open(_legacy_ctrl,  'rb') as f: _lc = pickle.load(f)
+        if _lt.n_features_ == len(features):
+            champion_model = TLearnerModel(_lt, _lc)
+            has_champion   = True
+            print("ℹ️  [Layer 4] Loaded legacy T-learner champion (จะถูกแทนด้วย X-learner ถ้า gate ผ่าน)")
+        else:
+            print(f"⚠️  [Layer 4] Legacy champion has {_lt.n_features_} features "
+                  f"but current data has {len(features)} — skipping")
 
     # ── Per-customer top product (highest cumulative spend) ──────────────────
     # Used to look up product-specific COGS for guardrail calculation
@@ -425,13 +527,10 @@ def run_layer4(pos_file_path="data/transactions.csv",
     print(f"💡 [Layer 4] Per-product COGS: {n_matched:,}/{len(cust_agg):,} customers matched "
           f"(fallback={_default_cogs:.1%})")
 
-    def evaluate_model_profit(model_t, model_c):
-        prob_t = model_t.predict_proba(cust_agg[features])[:, 1]
-        prob_c = model_c.predict_proba(cust_agg[features])[:, 1]
-
+    def evaluate_model_profit(model):
         temp_df = cust_agg.copy()
-        temp_df['uplift_score'] = (prob_t - prob_c).round(4)
-        temp_df['prob_control'] = prob_c.round(4)
+        temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
+        temp_df['prob_control'] = model.predict_control_proba(cust_agg[features]).round(4)
         # rfm_decile_segment และ frequency มีใน cust_agg แล้ว — merge เฉพาะ columns ที่ยังขาด
         rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
         temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
@@ -546,7 +645,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
         temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
         return temp_df['expected_profit'].sum(), temp_df
 
-    challenger_profit, challenger_detail_df = evaluate_model_profit(lgb_challenger_treat, lgb_challenger_ctrl)
+    challenger_profit, challenger_detail_df = evaluate_model_profit(challenger_model)
     
     is_passed = True
     growth_pct = 0.0
@@ -573,7 +672,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
     gate_reason = ""
     
     if has_champion:
-        champion_profit, _ = evaluate_model_profit(lgb_champion_treat, lgb_champion_ctrl)
+        champion_profit, _ = evaluate_model_profit(champion_model)
         growth_pct = ((challenger_profit - champion_profit) / champion_profit) * 100
         
         if is_recession_mode:
@@ -658,9 +757,8 @@ def run_layer4(pos_file_path="data/transactions.csv",
     os.makedirs("models/archive", exist_ok=True)
 
     if is_passed:
-        with open(champion_path_treat, 'wb') as f: pickle.dump(lgb_challenger_treat, f)
-        with open(champion_path_ctrl, 'wb') as f: pickle.dump(lgb_challenger_ctrl, f)
-        print(f"🟢 GATE PASSED — อัปเดต Champion เรียบร้อย")
+        with open(champion_path, 'wb') as f: pickle.dump(challenger_model, f)
+        print(f"🟢 GATE PASSED — อัปเดต Champion เรียบร้อย (X-learner, n_estimators=200)")
     else:
         print(f"🔴 GATE FAILED — คงใช้ Champion เดิม")
         if has_champion and growth_pct < -5:
