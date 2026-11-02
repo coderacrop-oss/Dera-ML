@@ -81,9 +81,10 @@ def _corrected_qini_curve(
         0.0,
     )
 
-    # True random diagonal: straight line 0 → ate * N
-    # (what a random policy achieves in absolute conversion units)
-    random_end = ate * n
+    # True random diagonal: straight line 0 → ate * N_T
+    # Under random targeting, at fraction f we select f*N_T treated units,
+    # each contributing (mu1-mu0) incremental conversion → random_end = N_T * ate
+    random_end = ate * N_T
     random = fracs * random_end
 
     # Subtract random so the area we integrate is purely the model lift
@@ -247,7 +248,8 @@ def _kendall_tau_deciles(decile_df: pd.DataFrame) -> float:
     valid = decile_df.dropna(subset=["net_uplift"])
     if len(valid) < 2:
         return float("nan")
-    tau, _ = kendalltau(valid["decile"].values, valid["net_uplift"].values)
+    # Use mean_pred_uplift (ascending) vs net_uplift — positive tau = good ranking
+    tau, _ = kendalltau(valid["mean_pred_uplift"].values, valid["net_uplift"].values)
     return float(tau)
 
 
