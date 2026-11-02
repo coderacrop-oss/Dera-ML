@@ -237,6 +237,8 @@ def _estimate_rates_from_data(df):
     discount_rate = CONFIG["default_discount_rate"]
     source = "config_default"
 
+    product_cogs = {}   # per-product COGS dict {product_name: cogs_rate}
+
     # --- COGS rate: price floor per product ---
     price_col = "unit_price" if "unit_price" in df.columns else None
     if price_col and "product_name" in df.columns:
@@ -251,10 +253,14 @@ def _estimate_rates_from_data(df):
             # ใช้ 10th percentile แทน min เพื่อลด noise จาก outlier price
             price_p10 = df_pos.groupby("product_name")[price_col].quantile(0.10)
             prod["p10"] = prod.index.map(price_p10)
-            cost_ratio = (prod["p10"] / prod["mean"]).clip(0.10, 0.90).median()
+            prod["cogs_est"] = (prod["p10"] / prod["mean"]).clip(0.10, 0.90)
+            cost_ratio = prod["cogs_est"].median()
             if 0.20 < cost_ratio < 0.80:
                 cogs_rate = round(float(cost_ratio), 3)
                 source = "data_driven"
+                product_cogs = prod["cogs_est"].round(3).to_dict()
+                print(f"💡 [Rates] Per-product COGS estimated for {len(product_cogs):,} products "
+                      f"(range {prod['cogs_est'].min():.1%}–{prod['cogs_est'].max():.1%})")
 
     # --- Discount rate: promo frequency × CONFIG depth ---
     if "promo_type" in df.columns:
@@ -265,7 +271,7 @@ def _estimate_rates_from_data(df):
             source = "data_driven"
 
     print(f"💡 [Rates] COGS={cogs_rate:.1%}  Discount={discount_rate:.1%}  source={source}")
-    return cogs_rate, discount_rate
+    return cogs_rate, discount_rate, product_cogs
 
 
 def layer3_and_4_processing(segments, df_raw, df_rfm):
@@ -274,7 +280,7 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
     total_profit = 0
 
     # Estimate rates from data (falls back to CONFIG if insufficient)
-    estimated_cogs, estimated_discount = _estimate_rates_from_data(df_raw)
+    estimated_cogs, estimated_discount, product_cogs = _estimate_rates_from_data(df_raw)
 
     for seg in segments:
         aov = seg["avg_monetary"]
@@ -329,7 +335,7 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
         "target_segments": updated_segments,
         "gate_status": "PASSED",
         "total_campaign_projected_profit": f"{total_profit:,.2f} บาท"
-    }
+    }, product_cogs, estimated_cogs
 
 
 def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
@@ -451,10 +457,10 @@ if __name__ == "__main__":
         df_raw = load_and_preprocess_csv(csv_file)
         segments, df_rfm = layer1_csv_segmentation(df_raw)
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
-        validated_payload = layer3_and_4_processing(segments, df_raw, df_rfm)
+        validated_payload, product_cogs, default_cogs = layer3_and_4_processing(segments, df_raw, df_rfm)
 
         print("\n🔍 [Layer 4] รัน LightGBM Uplift + CFO Guardrail...")
-        layer4_df = run_layer4(pos_file_path=csv_file)
+        layer4_df = run_layer4(pos_file_path=csv_file, product_cogs_dict=product_cogs, default_cogs=default_cogs)
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
 
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")

@@ -269,7 +269,9 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
 
 
 def run_layer4(pos_file_path="data/transactions.csv",
-               promo_response_path="data/marketing_campaign.csv"):
+               promo_response_path="data/marketing_campaign.csv",
+               product_cogs_dict=None,
+               default_cogs=None):
     print("=== กำลังประมวลผล Layer 4: Campaign Engine (Dynamic Context Validation Gate) ===")
 
     if not os.path.exists(pos_file_path):
@@ -405,10 +407,28 @@ def run_layer4(pos_file_path="data/transactions.csv",
         else:
             print(f"⚠️  [Layer 4] Champion model has {champ_n_features} features but current data has {len(features)} — skipping champion comparison")
 
+    # ── Per-customer top product (highest cumulative spend) ──────────────────
+    # Used to look up product-specific COGS for guardrail calculation
+    top_product_map = (
+        raw_df.groupby(['customer_id', 'product_name'])['total_price']
+        .sum().reset_index()
+        .sort_values('total_price', ascending=False)
+        .drop_duplicates('customer_id')
+        .set_index('customer_id')['product_name']
+    )
+    cust_agg['top_product'] = cust_agg['customer_id'].map(top_product_map).fillna('')
+
+    # Resolve COGS source: per-product dict > default_cogs param > CONFIG
+    _product_cogs = product_cogs_dict or {}
+    _default_cogs = default_cogs if default_cogs is not None else CONFIG["cogs_rate"]
+    n_matched = sum(1 for p in cust_agg['top_product'] if p in _product_cogs)
+    print(f"💡 [Layer 4] Per-product COGS: {n_matched:,}/{len(cust_agg):,} customers matched "
+          f"(fallback={_default_cogs:.1%})")
+
     def evaluate_model_profit(model_t, model_c):
         prob_t = model_t.predict_proba(cust_agg[features])[:, 1]
         prob_c = model_c.predict_proba(cust_agg[features])[:, 1]
-        
+
         temp_df = cust_agg.copy()
         temp_df['uplift_score'] = (prob_t - prob_c).round(4)
         temp_df['prob_control'] = prob_c.round(4)
@@ -416,8 +436,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
         rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
         temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
         temp_df = temp_df.merge(context_df[['customer_id', 'time_context', 'in_stock']].drop_duplicates('customer_id'), on='customer_id', how='left')
-        
-        COGS_RATE        = CONFIG["cogs_rate"]
+
         PROMO_COST_RATES = CONFIG["promo_cost_rates"]
 
         # Data-adaptive basket thresholds: if dataset avg_spent is far below config
@@ -450,7 +469,10 @@ def run_layer4(pos_file_path="data/transactions.csv",
             avg_spent = float(row['avg_spent'])
             is_spike  = float(row['is_campaign_spike'])
 
-            gross_margin = avg_spent * (1 - COGS_RATE)
+            # Per-product COGS: look up customer's top product, fall back to dataset default
+            top_prod  = row.get('top_product', '')
+            cogs      = _product_cogs.get(top_prod, _default_cogs)
+            gross_margin = avg_spent * (1 - cogs)
             p_baseline   = max(0.0, prob_c)
             p_treated    = max(0.0, min(1.0, prob_c + uplift))
             baseline_profit = round(gross_margin * p_baseline, 2)
@@ -470,7 +492,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
             def _guardrail_ok(promo_cost_rate):
                 promo_cost = avg_spent * promo_cost_rate
                 gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
-                net_profit = gross_rev - avg_spent * COGS_RATE - promo_cost
+                net_profit = gross_rev - avg_spent * cogs - promo_cost
                 net_margin = net_profit / gross_rev if gross_rev > 0 else 0
                 incremental = gross_margin * (p_treated - p_baseline) - promo_cost
                 return net_margin >= MIN_MARGIN and incremental > 0, promo_cost
