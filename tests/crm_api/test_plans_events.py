@@ -45,6 +45,15 @@ def test_events_sum_equals_scheduled_and_shape(client, data_dir):
     assert e["id"].startswith("2026-12|") and len({x["id"] for x in ev}) == len(ev)
 
 
+def test_events_say_which_batch_of_the_wave_they_are(client):
+    events = client.get("/v1/plans/2026-12/events", headers=HDR).json()["events"]
+    for wave in (1, 2, 3):
+        mine = [e for e in events if e["wave"] == wave]            # already in time order
+        assert [e["batch_index"] for e in mine] == list(range(1, len(mine) + 1))
+        assert {e["batch_total"] for e in mine} == {len(mine)}
+        assert {e["wave_customer_total"] for e in mine} == {sum(e["customer_count"] for e in mine)}
+
+
 def test_events_exclude_holdout_customers(client):
     text = client.get("/v1/plans/2026-12/events", headers=HDR).text
     assert "H001" not in text and "H002" not in text

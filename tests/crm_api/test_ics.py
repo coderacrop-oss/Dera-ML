@@ -13,7 +13,7 @@ GEN = datetime(2026, 11, 3, 3, 0, tzinfo=timezone.utc)
 def _event(action="Offer", count=3, eid="2026-12|2026-12-02T07:00|w1|off_peak_window"):
     return {"id": eid, "start": "2026-12-02T07:00:00+07:00", "wave": 1, "send_window": "Off-Peak Window",
             "channel": "Email/SMS", "customer_count": count, "actions": [{"name": action, "count": count}],
-            "expected_profit": 12.5}
+            "expected_profit": 12.5, "batch_index": 3, "batch_total": 10, "wave_customer_total": 209}
 
 
 def _unfold(text):
@@ -52,6 +52,17 @@ def test_ics_long_thai_line_folded_on_character_boundary():
     assert any(l.startswith(" ") for l in lines)  # something was actually folded
     assert name in _unfold(out).replace("\\n", "\n")
     out.encode("utf-8").decode("utf-8")
+
+
+def test_ics_title_and_description_explain_the_batch_in_thai():
+    out = _unfold(render_calendar("2026-12", [_event("โปรทดสอบ", count=22)], GEN))
+    assert "SUMMARY:รอบ 1 (3/10) · 22 คน · โปรทดสอบ" in out
+    desc = next(l for l in out.split("\r\n") if l.startswith("DESCRIPTION:"))
+    for part in ("รอบ 1: ดึงลูกค้าช่วงเงียบ", "กลุ่มย่อยที่ 3 จาก 10", "ทั้งรอบ 209 คน", "ครั้งเดียว",
+                 "ช่วง: Off-Peak Window", "ช่องทาง: Email/SMS", "จำนวนลูกค้า: 22 คน", "โปรทดสอบ (22)",
+                 "กำไรคาดการณ์: 12.5 บาท"):
+        assert part in desc, part
+    assert "customers" not in out and "Expected profit" not in out
 
 
 def test_ics_dtend_and_timestamps():

@@ -10,7 +10,7 @@ from . import docs
 from .auth import require_key_or_calendar_token
 from .errors import valid_month
 from .loaders import TZ, load_month
-from .plans import events_for
+from .plans import WAVE_LABELS_TH, events_for
 
 router = APIRouter()
 
@@ -54,18 +54,22 @@ def render_calendar(month: str, events: list[dict], generated_at: datetime) -> s
              f"X-WR-CALNAME:{_esc('Campaign ' + month)}", "X-WR-TIMEZONE:Asia/Bangkok", *_VTIMEZONE]
     for e in events:
         start = datetime.fromisoformat(e["start"])
-        top = e["actions"][0]["name"] if e["actions"] else "Campaign"
+        top = e["actions"][0]["name"] if e["actions"] else "แคมเปญ"
+        wave, idx, total = e["wave"], e["batch_index"], e["batch_total"]
         desc = "\n".join([
-            f"Window: {e['send_window']}", f"Channel: {e.get('channel') or '-'}",
-            f"Customers: {e['customer_count']}",
-            "Actions: " + ", ".join(f"{a['name']} ({a['count']})" for a in e["actions"]),
-            f"Expected profit: {e['expected_profit']} THB"])
+            f"รอบ {wave}: {WAVE_LABELS_TH.get(wave, '')}",
+            f"กลุ่มย่อยที่ {idx} จาก {total} ของรอบนี้ (ทั้งรอบ {e['wave_customer_total']} คน) "
+            "— ลูกค้าแต่ละคนได้รับข้อความครั้งเดียวในเดือนนี้",
+            f"ช่วง: {e['send_window']}", f"ช่องทาง: {e.get('channel') or '-'}",
+            f"จำนวนลูกค้า: {e['customer_count']} คน",
+            "โปร: " + ", ".join(f"{a['name']} ({a['count']})" for a in e["actions"]),
+            f"กำไรคาดการณ์: {e['expected_profit']} บาท"])
         lines += [
             "BEGIN:VEVENT", f"UID:{e['id']}@crm-api", f"DTSTAMP:{_utc(generated_at)}",
             f"LAST-MODIFIED:{_utc(generated_at)}", "SEQUENCE:0",
             f"DTSTART;TZID=Asia/Bangkok:{_local(start)}",
             f"DTEND;TZID=Asia/Bangkok:{_local(start + timedelta(minutes=30))}",
-            "SUMMARY:" + _esc(f"Wave {e['wave']}: {top} ({e['customer_count']} customers)"),
+            "SUMMARY:" + _esc(f"รอบ {wave} ({idx}/{total}) · {e['customer_count']} คน · {top}"),
             "DESCRIPTION:" + _esc(desc), "END:VEVENT"]
     lines.append("END:VCALENDAR")
     return "\r\n".join(_fold(l) for l in lines) + "\r\n"

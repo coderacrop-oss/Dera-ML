@@ -34,6 +34,12 @@ changes; clients can use the `ETag` header / `If-None-Match` (→ `304`) to dete
 | `GET /v1/plans/{month}/events/{event_id}/customers?limit=&cursor=` | recipients of one event (paged, keyset cursor) for batch sending; `409 plan_changed` if the plan is updated mid-read |
 | `GET /v1/plans/{month}/customers/{id}` | that customer's scheduled offer; `404` for holdout/suppressed/unknown |
 
+### Waves and batches
+A *wave* is a group of customers by promotion type (1 off-peak traffic, 2 peak upsell, 3 VIP), **not** one send.
+Each wave is spread over several days (a different batch of customers per day) and every customer is scheduled
+exactly once per month. Each event carries `batch_index`, `batch_total` and `wave_customer_total` so a UI can show
+"batch 3 of 10 · 22 people (209 in the wave)".
+
 ### Batch sending flow (the CRM does the sending)
 1. `GET /v1/plans/{month}/events` → each event has `start`, `wave`, `customer_count` and a ready-made `customers_url`.
 2. At/before `start`, `GET customers_url?limit=1000`, then follow `next_cursor` until it is `null`.

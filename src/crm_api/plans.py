@@ -17,6 +17,7 @@ from .loaders import MonthData, load_month
 router = APIRouter()
 
 WAVE_NAMES = {1: "off_peak_traffic", 2: "peak_upsell", 3: "vip_early"}
+WAVE_LABELS_TH = {1: "ดึงลูกค้าช่วงเงียบ", 2: "เสนอขายช่วงยุ่ง", 3: "VIP ล่วงหน้า"}
 DEFAULT_WINDOW = "Peak Window"
 
 
@@ -86,6 +87,14 @@ def build_events(month: str, schedule: pd.DataFrame) -> list[dict]:
             "actions": [{"name": n, "count": int(c)} for n, c in actions.items()],
             "expected_profit": round(float(g["expected_profit"].sum()), 2),
         })
+    # A wave is spread over several send days; tell the caller which batch of its wave each event is.
+    per_wave: dict[int, list[dict]] = {}
+    for e in events:                                   # events are already in time order
+        per_wave.setdefault(e["wave"], []).append(e)
+    for wave_events in per_wave.values():
+        total_customers = sum(e["customer_count"] for e in wave_events)
+        for i, e in enumerate(wave_events, start=1):
+            e["batch_index"], e["batch_total"], e["wave_customer_total"] = i, len(wave_events), total_customers
     return events
 
 

@@ -54,6 +54,15 @@ def test_success_and_error_responses_are_described_in_thai(client):
                 assert THAI.search(r.get("description", "")), f"{code} on {path}"
 
 
+def test_docs_explain_what_a_wave_is_and_that_it_is_spread_over_days(client):
+    spec = _spec(client)
+    app_desc = spec["info"]["description"]
+    assert "รอบ (wave)" in app_desc and "กระจาย" in app_desc and "ครั้งเดียว" in app_desc
+    events_desc = spec["paths"]["/v1/plans/{month}/events"]["get"]["description"]
+    for field in ("batch_index", "batch_total", "wave_customer_total"):
+        assert field in events_desc, field
+
+
 def test_security_schemes_and_app_description_are_thai(client):
     spec = _spec(client)
     for name, s in spec["components"]["securitySchemes"].items():
