@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -57,6 +58,14 @@ def _with_window(schedule: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def event_id(month: str, start, wave, window: str) -> str:
+    return f"{month}|{start:%Y-%m-%dT%H:%M}|w{int(wave)}|{_slug(window)}"
+
+
+def customers_url(month: str, eid: str) -> str:
+    return f"/v1/plans/{month}/events/{quote(eid, safe='')}/customers"
+
+
 def build_events(month: str, schedule: pd.DataFrame) -> list[dict]:
     """One event per (send_datetime, wave, send_window); ids depend only on those fields."""
     if schedule.empty:
@@ -65,8 +74,10 @@ def build_events(month: str, schedule: pd.DataFrame) -> list[dict]:
     events = []
     for (start, wave, window), g in df.groupby(["send_datetime", "wave", "send_window"], sort=True):
         actions = g["recommended_action"].value_counts()
+        eid = event_id(month, start, wave, window)
         events.append({
-            "id": f"{month}|{start:%Y-%m-%dT%H:%M}|w{int(wave)}|{_slug(window)}",
+            "id": eid,
+            "customers_url": customers_url(month, eid),
             "start": start.isoformat(),
             "wave": int(wave),
             "send_window": window,

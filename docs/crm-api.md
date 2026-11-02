@@ -31,7 +31,14 @@ changes; clients can use the `ETag` header / `If-None-Match` (→ `304`) to dete
 | `GET /v1/plans/{month}/calendar.ics` | iCalendar feed; also accepts `?token=$CRM_API_CALENDAR_TOKEN` |
 | `GET /v1/plans/{month}/segments` | customer groups (needs `segments_{month}.json`, else `segments: null`) |
 | `GET /v1/plans/{month}/promotions` | distinct promotions with counts and an example message |
+| `GET /v1/plans/{month}/events/{event_id}/customers?limit=&cursor=` | recipients of one event (paged, keyset cursor) for batch sending; `409 plan_changed` if the plan is updated mid-read |
 | `GET /v1/plans/{month}/customers/{id}` | that customer's scheduled offer; `404` for holdout/suppressed/unknown |
+
+### Batch sending flow (the CRM does the sending)
+1. `GET /v1/plans/{month}/events` → each event has `start`, `wave`, `customer_count` and a ready-made `customers_url`.
+2. At/before `start`, `GET customers_url?limit=1000`, then follow `next_cursor` until it is `null`.
+3. Send each recipient's `message` on your own channel. On `409 plan_changed`, restart that event from page 1.
+The API does not send anything, has no "sent" state and does not receive outcomes.
 
 Errors: `{"error": {"code", "message"}}` with `401/404/422/503`.
 `503 data_unavailable` is retry-able: a file is missing/unparseable, or the files of a month disagree with the

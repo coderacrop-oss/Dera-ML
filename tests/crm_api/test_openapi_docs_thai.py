@@ -7,6 +7,7 @@ EXPECTED_ROUTES = {
     ("get", "/v1/plans/{month}/events"), ("get", "/v1/plans/{month}/calendar.ics"),
     ("get", "/v1/plans/{month}/segments"), ("get", "/v1/plans/{month}/promotions"),
     ("get", "/v1/plans/{month}/customers/{customer_id}"),
+    ("get", "/v1/plans/{month}/events/{event_id}/customers"),
 }
 
 
@@ -34,7 +35,7 @@ def test_every_parameter_has_thai_description(client):
         for prm in op.get("parameters", []):
             seen.add(prm["name"])
             assert THAI.search(prm.get("description", "")), f"parameter {prm['name']} on {path}"
-    assert {"month", "customer_id", "from", "to", "wave"} <= seen
+    assert {"month", "customer_id", "from", "to", "wave", "event_id", "cursor", "limit"} <= seen
 
 
 def test_every_operation_has_a_thai_tag_and_tags_are_described(client):
