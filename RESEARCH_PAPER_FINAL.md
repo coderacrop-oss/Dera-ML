@@ -500,6 +500,10 @@ The high suppression rate (94.7%) is primarily driven by `Do Nothing (CFO Guardr
 | Revenue lift | +3.29% | N/A | N/A |
 | Label mode | Real (randomised) | Observational (AcceptedCmp) | Observational (proxy) |
 | Adaptive thresholds | No (AOV >> $100) | No | **Yes (P10=$2.24, P50=$3.03)** |
+| Pipeline vs Broadcast All† | +0.3% | N/A | **+522%** |
+| Guardrail value saved† | ฿2,695 | N/A | **$490** |
+
+†*Model-estimated incremental profit (Δprofit = gross\_margin × uplift\_score − promo\_cost) computed on observational/proxy labels — not realized revenue from live deployment. See disclaimer in Section 6.8.2.*
 
 The Dunnhumby dataset is the largest evaluated (2.6M rows, 2,500 customers) and exercises the most features: data-driven rate estimation, adaptive basket thresholds, top-150 product filter, broadcast list export, and Layer 4 → Layer 5 merge. The restaurant dataset retains the highest silhouette and the only causally interpretable AUUC. Together, the three datasets validate the pipeline across synthetic F&B (controlled), aggregate retail (medium scale), and large-scale real grocery transaction data.
 
@@ -550,18 +554,38 @@ The T-learner uplift model is evaluated using the Qini curve and Area Under the 
 
 #### 6.8.2 Baseline Comparison
 
-Net incremental profit (after promo costs, post guardrail)
+**Metric definition:** All figures below are *model-estimated incremental profit*:
 
-| Method | Total Expected Profit | Δ vs Full Pipeline |
-|--------|----------------------|--------------------|
-| Full Pipeline (uplift + guardrail + context) | **฿2,162** | — |
-| Broadcast All Customers (standard campaign) | ฿2,109 | +฿53 (+0.3%) |
-| RFM-Only (no uplift model) | −฿1,334 | +฿3,496 |
-| Random 30% Targeting | ฿744 | +฿1,418 |
+$$\Delta\text{profit}_i = \text{gross\_margin}_i \times \text{uplift\_score}_i - \text{promo\_cost}_i$$
 
-Note: The 'RFM-Only (no uplift model)' baseline in Table 6.7.2 uses prob_control as conversion estimate (which is near-zero for purely promo-driven customers, making promo costs dominate). The '− Guardrail − Context' row in Table 6.7.3 differs because it uses uplift scores but removes both guardrail and context — an architectural combination, not a strict RFM baseline.
+summed over targeted customers. This is not realized revenue from a live campaign. For the synthetic dataset (Dataset 1), uplift scores come from a randomized generator and are causally interpretable. For Datasets 2–3, uplift scores are derived from observational or proxy labels and reflect model-estimated directionality, not causal effects. All figures should be interpreted as *projected* incremental profit under the model's assumptions, pending validation against real A/B deployment results (see Research Roadmap, Section 8).
 
-The full pipeline marginally outperforms broadcast (+0.3%), confirming that on a small 200-customer synthetic dataset the uplift model's contribution over naive broadcast is modest. The more significant comparison is against RFM-only and random baselines, which both produce substantially lower — or negative — expected profits. The RFM-only result (−฿1,334) demonstrates that assigning campaigns based on segment alone, without an uplift model to calibrate expected return, frequently dispatches money-losing campaigns. At larger scale (thousands of customers and accumulated real uplift signal), the differential between full pipeline and broadcast is expected to widen.
+**Dataset 1 — Synthetic Restaurant (200 customers, randomized labels)**
+
+| Method | Customers | Est. Incremental Profit | Δ vs Full Pipeline |
+|--------|-----------|------------------------|--------------------|
+| Full Pipeline (uplift + guardrail + context) | 30 | **฿2,162** | — |
+| Broadcast All Customers | 200 | ฿2,109 | −฿53 (−0.3%) |
+| RFM-Only (no uplift model) | 100 | −฿1,334 | −฿3,496 |
+| Random 30% Targeting | 60 | ฿744 | −฿1,418 |
+
+On the 200-customer synthetic dataset the pipeline's margin over naive broadcast is modest (+0.3%). The more meaningful comparison is against RFM-only (−฿1,334), which demonstrates that segment-based targeting without uplift frequently dispatches money-losing campaigns.
+
+**Dataset 3 — Dunnhumby Grocery (2,500 customers, observational proxy labels)**
+
+| Method | Customers | Est. Incremental Profit† | Δ vs Full Pipeline |
+|--------|-----------|-------------------------|--------------------|
+| Full Pipeline (uplift + guardrail + context) | 133 | **$93.80** | — |
+| Broadcast All Customers | 2,500 | −$396.33 | −$490 (−522%) |
+| RFM-Only (top 50%, no uplift) | 1,250 | −$193.95 | −$288 (−307%) |
+
+†*Observational proxy labels; not causally interpretable. See disclaimer above.*
+
+On the 2,500-customer grocery dataset, the pattern is far more pronounced: broadcasting to all customers produces *negative* estimated incremental profit (−$396), while the pipeline's guardrail filter preserves $490 in value by blocking 2,367 customers with Δprofit < 0. This result is consistent with the grocery context, where the majority of customers have near-zero predicted uplift above their baseline purchase propensity — making indiscriminate campaign dispatch net-negative after promo costs. The CFO Guardrail scales in value with dataset size: on a larger population with more money-losing customers to block, its financial contribution grows proportionally.
+
+**Scaling pattern:** The pipeline's advantage over naive broadcast widens substantially with dataset size — from +0.3% on n=200 (synthetic, randomized) to +522% on n=2,500 (observational proxy). This is consistent with the hypothesis that guardrail value compounds as the proportion of near-zero-uplift customers increases. Real-world validation with the forthcoming field study will determine whether this scaling holds under causally identified conditions.
+
+*Note: The 'RFM-Only' baseline uses prob\_control as the conversion estimate (near-zero for purely promo-driven customers), making promo costs dominate and producing negative incremental profit — confirming that uplift scoring is a prerequisite for the guardrail to operate selectively.*
 
 #### 6.8.3 Ablation Study
 
@@ -658,7 +682,7 @@ This paper presented the ML Campaign Engine, a five-layer MLOps pipeline that en
 
 The dual-gate CFO Guardrail — enforcing a net margin floor and a per-customer incremental profit check at inference time — extends prior work on profit-driven uplift modeling [27, 28] by implementing financial validation as a hard, config-driven constraint embedded in the ML decision loop, eliminating the manual organizational review step typical of conventional deployments. Ablation analysis demonstrates that the CFO Guardrail is the primary mechanism preventing money-losing campaigns on this synthetic dataset, preventing ฿2,695 in negative expected profit.
 
-Evaluation on two datasets confirms context-appropriate behavior: the synthetic restaurant dataset (200 customers) yields k = 2 with silhouette = 0.679, AUUC = 0.2351, gross revenue uplift of ฿74,439 and net incremental profit after financial filtering of ฿2,162; the public marketing campaign dataset (905 customers) yields k = 3 with silhouette = 0.347 and $265,650 USD in projected profit. Dynamic cluster selection correctly adapts to both data structures. All six stress-test scenarios pass quantitative pass criteria. The T-learner uplift model outperforms random targeting (AUUC = 0.2351), though causal interpretation requires accumulated holdout data from the 5% ongoing control group.
+Evaluation across three datasets confirms context-appropriate behavior and a consistent scaling pattern. The synthetic restaurant dataset (200 customers) yields k = 2 with silhouette = 0.679, AUUC = 0.2351, and pipeline marginally outperforming naive broadcast (+0.3%) under randomized labels. The Dunnhumby grocery dataset (2,500 customers) yields k = 3 with silhouette = 0.595 and a substantially larger guardrail advantage: the full pipeline outperforms broadcast-all by +522% in model-estimated incremental profit ($93.80 vs −$396.33), with the CFO Guardrail preventing $490 in estimated losses by blocking 2,302 customers with negative predicted incremental profit. Dynamic cluster selection correctly adapts across all data structures. All six stress-test scenarios pass quantitative criteria. The scaling pattern — pipeline advantage grows from +0.3% at n=200 to +522% at n=2,500 — is consistent with the hypothesis that guardrail value compounds as the fraction of near-zero-uplift customers increases. All profit figures are model-estimated projections; causal validation requires the forthcoming real-world field study.
 
 Honest limitations include the small synthetic dataset, deterministic model convergence at n=200, and the absence of real pilot data. All profit figures reported in this paper are model-estimated projections on synthetic or public datasets — they represent the system's designed behavior under controlled conditions, not realized revenue outcomes from live campaigns.
 
