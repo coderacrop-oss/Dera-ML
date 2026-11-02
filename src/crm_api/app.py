@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Request
 
 from .errors import ApiError, install_handlers
 from .loaders import list_months
+from . import plans
 from .settings import Settings
 
 
@@ -30,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def months():
         return {"months": list_months(settings.data_dir)}
 
+    app.include_router(plans.router, prefix="/v1", dependencies=[Depends(require_key)])
     return app
 
 

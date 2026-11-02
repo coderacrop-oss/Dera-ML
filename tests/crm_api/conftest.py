@@ -12,6 +12,8 @@ CAL_TOKEN = "cal-token"
 HDR = {"X-API-Key": KEY}
 
 ACTIONS = {1: "Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ", 2: "Standard Retention", 3: "VIP Early Access"}
+SCHEDULE_COLUMNS = ["customer_id", "segment_name", "wave", "recommended_action", "send_datetime", "send_window",
+                    "send_time_hint", "channel", "message", "offer", "expected_profit", "should_send"]
 WINDOWS = {1: "Off-Peak Window", 2: "Peak Window", 3: "Peak Window"}
 
 
@@ -30,7 +32,8 @@ def make_schedule_rows(n=12):
 
 
 def write_fixture_month(dir_, month="2026-12", *, schedule_rows=None, segments=True):
-    schedule = pd.DataFrame(schedule_rows if schedule_rows is not None else make_schedule_rows())
+    rows = schedule_rows if schedule_rows is not None else make_schedule_rows()
+    schedule = pd.DataFrame(rows, columns=None if rows else SCHEDULE_COLUMNS)
     schedule.to_csv(dir_ / f"campaign_schedule_{month}.csv", index=False)
     pd.DataFrame([dict(customer_id="H001", segment_name="1. Champions", recommended_action=ACTIONS[1],
                        offer="x", expected_profit=5.0, holdout_reason="5% control"),
