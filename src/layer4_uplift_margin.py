@@ -643,6 +643,143 @@ def build_layer4_context(pos_file_path, promo_response_path=None, product_cogs_d
                          label_mode="real" if use_real_labels else "proxy")
 
 
+def classify_uplift_group(uplift: float, prob_control: float) -> str:
+    """
+    Step 1 of the 2-step decision: classify customer into uplift group.
+
+    Returns one of:
+      "persuadable"    — positive uplift, prob_control low-medium → send with promo
+      "sure_thing"     — high prob_control, converts regardless → send loyalty only
+      "do_not_disturb" — negative uplift, sending hurts conversion → do not send
+      "lost_cause"     — near-zero uplift + low baseline → ROI negative for any action
+
+    Thresholds are read from CONFIG.
+    """
+    neg_guard = CONFIG["negative_uplift_guard"]
+    sure_prob = CONFIG["sure_thing_prob_threshold"]
+    lc_uplift = CONFIG["lost_cause_uplift_threshold"]
+    lc_prob   = CONFIG["lost_cause_prob_threshold"]
+
+    if uplift < neg_guard:
+        return "do_not_disturb"
+    if prob_control >= sure_prob:
+        return "sure_thing"
+    if uplift < lc_uplift and prob_control < lc_prob:
+        return "lost_cause"
+    return "persuadable"
+
+
+def build_action_menu(
+    group: str,
+    avg_spent: float,
+    cogs: float,
+    uplift: float,
+    prob_control: float,
+    rfm_seg,
+    is_spike: float,
+    time_context: str,
+    top_bundle_name: str,
+    product_cogs: dict,
+    default_cogs: float,
+) -> tuple[str, float, str]:
+    """
+    Step 2 of the 2-step decision: select the best profitable action for customers
+    who passed Step 1 (persuadable or sure_thing).
+
+    All actions are pre-validated: expected_profit > 0 AND net_margin >= MIN_MARGIN.
+    Returns (action_name, expected_profit, send_window).
+    Returns ("", baseline_profit, time_context) if no profitable action exists (rare edge case).
+
+    Sure Things: loyalty-only menu (vip_points, early_access) — no discount actions,
+    since they convert regardless and a discount would be margin cannibalization.
+    Persuadables: full menu ordered by ROI, best action wins.
+    """
+    PROMO_COST_RATES = CONFIG["promo_cost_rates"]
+    MIN_MARGIN       = CONFIG["min_allowable_net_margin"]
+    high_uplift      = CONFIG["high_uplift_threshold"]
+    vip_rfm          = CONFIG["vip_rfm_threshold"]
+    spike_rfm        = CONFIG["spike_rfm_threshold"]
+    mid_rfm          = CONFIG["mid_rfm_threshold"]
+
+    is_off_peak  = (time_context == "Off-Peak")
+    send_window  = "Off-Peak Window" if is_off_peak else "Peak Window"
+    gross_margin = avg_spent * (1 - cogs)
+    p_baseline   = max(0.0, prob_control)
+    p_treated    = max(0.0, min(1.0, prob_control + uplift))
+    baseline_profit = round(gross_margin * p_baseline, 2)
+
+    def _viable(rate_key: str) -> tuple[bool, float]:
+        """Return (is_profitable, expected_profit) for a given promo cost rate key."""
+        cost_rate  = PROMO_COST_RATES[rate_key]
+        promo_cost = avg_spent * cost_rate
+        gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
+        net_profit = gross_rev - avg_spent * cogs - promo_cost
+        net_margin = net_profit / gross_rev if gross_rev > 0 else 0
+        incremental = gross_margin * (p_treated - p_baseline) - promo_cost
+        profit = round(gross_margin * p_treated - promo_cost, 2)
+        return (net_margin >= MIN_MARGIN and incremental > 0), profit
+
+    # ── Sure Things: loyalty-only (no discount) ──────────────────────────────
+    if group == "sure_thing":
+        rate = "vip_points" if is_off_peak else "peak_upsell"
+        ok, profit = _viable(rate)
+        if ok and rfm_seg >= vip_rfm:
+            action = "VIP Reward: แจกแต้ม X2" if is_off_peak else "VIP Early Access"
+            return action, profit, send_window
+        ok, profit = _viable("vip_points")
+        if ok:
+            return "Loyalty Nurture: แต้มสะสม", profit, send_window
+        return "", baseline_profit, time_context
+
+    # ── Persuadables: full menu, pick highest profit ──────────────────────────
+    candidates: list[tuple[str, float, str]] = []
+
+    # Festival spike
+    if is_spike > 0.5 and rfm_seg >= spike_rfm:
+        ok, profit = _viable("festival")
+        if ok:
+            candidates.append(("Standard Retention (Festival Guard)", profit, send_window))
+
+    # Off-peak traffic driver
+    if is_off_peak and rfm_seg >= mid_rfm:
+        ok, profit = _viable("off_peak_traffic")
+        if ok:
+            candidates.append(("Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ", profit, send_window))
+        ok, profit = _viable("off_peak_vip")
+        if ok:
+            candidates.append(("Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)", profit, send_window))
+
+    # VIP upsell
+    if rfm_seg >= vip_rfm:
+        rate = "peak_upsell" if not is_off_peak else "vip_points"
+        ok, profit = _viable(rate)
+        if ok:
+            candidates.append(("VIP Reward: แจกแต้ม X2", profit, send_window))
+
+    if rfm_seg >= vip_rfm and rfm_seg >= 9:
+        ok, profit = _viable("peak_upsell" if not is_off_peak else "vip_points")
+        if ok:
+            candidates.append(("VIP Early Access", profit, send_window))
+
+    # Bundle push (high uplift)
+    if uplift > high_uplift:
+        rate = "peak_upsell" if not is_off_peak else "bundle"
+        ok, profit = _viable(rate)
+        if ok:
+            candidates.append((f"Push Promotion: {top_bundle_name}", profit, send_window))
+
+    # Standard retention fallback
+    rate = "standard" if not is_off_peak else "off_peak"
+    ok, profit = _viable(rate)
+    if ok:
+        candidates.append(("Standard Retention", profit, send_window))
+
+    if candidates:
+        return max(candidates, key=lambda x: x[1])
+
+    return "", baseline_profit, time_context
+
+
 def decide_for_customers(model, ctx, customer_ids=None):
     """Score customers with `model` and apply the action rules + CFO guardrail.
 
@@ -678,10 +815,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
     customer_ctx = customer_context.merge(customer_stock, on='customer_id', how='left')
     temp_df = temp_df.merge(customer_ctx, on='customer_id', how='left')
 
-    PROMO_COST_RATES = CONFIG["promo_cost_rates"]
-
-    # Data-adaptive basket thresholds: if dataset avg_spent is far below config
-    # threshold (e.g. grocery vs wholesale), scale down to P10/P50 of actual data
+    # Data-adaptive basket thresholds
     config_low = CONFIG["low_basket_threshold"]
     config_mid = CONFIG["mid_basket_threshold"]
     actual_p10 = float(temp_df['avg_spent'].quantile(0.10))
@@ -693,14 +827,6 @@ def decide_for_customers(model, ctx, customer_ids=None):
     else:
         low_basket = config_low
         mid_basket = config_mid
-    neg_uplift   = CONFIG["negative_uplift_guard"]
-    high_uplift  = CONFIG["high_uplift_threshold"]
-    vip_rfm      = CONFIG["vip_rfm_threshold"]
-    vip_prob     = CONFIG["vip_prob_threshold"]
-    spike_rfm    = CONFIG["spike_rfm_threshold"]
-    mid_rfm      = CONFIG["mid_rfm_threshold"]
-
-    MIN_MARGIN = CONFIG["min_allowable_net_margin"]
 
     def calculate_action_and_profit(row):
         uplift       = float(row['uplift_score'])
@@ -709,99 +835,43 @@ def decide_for_customers(model, ctx, customer_ids=None):
         in_stock     = row['in_stock']
         avg_spent    = float(row['avg_spent'])
         is_spike     = float(row['is_campaign_spike'])
-        time_context = row.get('time_context', 'Peak')   # "Peak" or "Off-Peak"
-        is_off_peak  = (time_context == 'Off-Peak')
-
-        # Per-product COGS: look up customer's top product, fall back to dataset default
-        top_prod  = row.get('top_product', '')
-        cogs      = _product_cogs.get(top_prod, _default_cogs)
+        time_context = row.get('time_context', 'Peak')
+        top_prod     = row.get('top_product', '')
+        cogs         = _product_cogs.get(top_prod, _default_cogs)
         gross_margin = avg_spent * (1 - cogs)
         p_baseline   = max(0.0, prob_c)
-        p_treated    = max(0.0, min(1.0, prob_c + uplift))
         baseline_profit = round(gross_margin * p_baseline, 2)
 
-        # --- Do Nothing cases ---
+        # ── Step 1: Hard stops ────────────────────────────────────────────────
         if pd.isna(in_stock) or not in_stock:
             return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
         if avg_spent < low_basket:
             return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
-        if uplift < neg_uplift:
-            return pd.Series(["Do Nothing (Negative Uplift Guard)", baseline_profit, 0, time_context])
 
-        # Helper: per-customer CFO Guardrail check
-        # Incremental profit = gross_margin * (p_treated - p_baseline) - promo_cost
-        # Off-peak allows higher promo cost — justified by driving traffic to a quiet store.
-        # Peak uses lower cost — customers are already there, just retain/upsell lightly.
-        def _guardrail_ok(promo_cost_rate):
-            promo_cost = avg_spent * promo_cost_rate
-            gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
-            net_profit = gross_rev - avg_spent * cogs - promo_cost
-            net_margin = net_profit / gross_rev if gross_rev > 0 else 0
-            incremental = gross_margin * (p_treated - p_baseline) - promo_cost
-            return net_margin >= MIN_MARGIN and incremental > 0, promo_cost
+        # ── Step 1: Uplift group classification ───────────────────────────────
+        group = classify_uplift_group(uplift, prob_c)
+        if group == "do_not_disturb":
+            return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context])
+        if group == "lost_cause":
+            return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context])
 
-        # --- Peak-aware send window (for broadcast_list.csv) ---
-        # Notify customer 30-60 min BEFORE their typical shopping window opens
-        send_window = "Off-Peak Window" if is_off_peak else "Peak Window"
+        # ── Step 2: Action menu (pre-validated profitable actions only) ───────
+        action, profit, send_window = build_action_menu(
+            group=group, avg_spent=avg_spent, cogs=cogs,
+            uplift=uplift, prob_control=prob_c,
+            rfm_seg=rfm_seg, is_spike=is_spike,
+            time_context=time_context,
+            top_bundle_name=top_bundle_name,
+            product_cogs=_product_cogs,
+            default_cogs=_default_cogs,
+        )
 
-        # --- Active campaign cases with context-aware guardrail ---
+        if not action:
+            # Edge case: passed Step 1 but no action is profitable at this AOV
+            return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0, time_context])
 
-        # Festival spike — context-independent, always use festival rate
-        if is_spike > 0.5 and rfm_seg >= spike_rfm:
-            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["festival"])
-            if not ok:
-                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-            return pd.Series(["Standard Retention (Festival Guard)",
-                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+        return pd.Series([action, profit, 0, send_window])
 
-        # Off-Peak customers: goal is to drive traffic when store is quiet
-        # Use aggressive traffic-driver discount (off_peak_traffic rate = 0.22)
-        # Action name reflects the business intent: pull them in during the quiet window
-        if is_off_peak and uplift > 0 and rfm_seg >= mid_rfm:
-            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_traffic"])
-            if not ok:
-                # Too expensive even with off-peak intent → try lighter VIP points
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_vip"])
-                if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                return pd.Series(["Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-            return pd.Series(["Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
-                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-        # Peak customers: already arriving → upsell/reward, lower cost
-        if rfm_seg >= vip_rfm and prob_c > vip_prob:
-            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
-                                           else PROMO_COST_RATES["vip_points"])
-            if not ok:
-                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-            return pd.Series(["VIP Reward: แจกแต้ม X2",
-                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-        if rfm_seg >= vip_rfm and rfm_seg >= 9:
-            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
-                                           else PROMO_COST_RATES["vip_points"])
-            if not ok:
-                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-            return pd.Series(["VIP Early Access",
-                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-        if uplift > high_uplift:
-            rate = PROMO_COST_RATES["peak_upsell"] if not is_off_peak else PROMO_COST_RATES["bundle"]
-            ok, promo_cost = _guardrail_ok(rate)
-            if not ok:
-                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-            return pd.Series([f"Push Promotion: {top_bundle_name}",
-                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-        # Default: standard retention, peak uses cheaper rate
-        rate = PROMO_COST_RATES["standard"] if not is_off_peak else PROMO_COST_RATES["off_peak"]
-        ok, promo_cost = _guardrail_ok(rate)
-        if not ok:
-            return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-        return pd.Series(["Standard Retention",
-                          round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-        
     res = temp_df.apply(calculate_action_and_profit, axis=1)
     temp_df['recommended_action'] = res[0]
     temp_df['expected_profit']    = res[1]

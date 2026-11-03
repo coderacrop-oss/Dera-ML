@@ -61,6 +61,11 @@ CONFIG = {
     "spike_rfm_threshold":     7,     # RFM decile for campaign-spike guard
     "mid_rfm_threshold":       4,     # RFM decile for mid-tier off-peak eligibility
 
+    # Uplift group classification thresholds
+    "lost_cause_uplift_threshold": 0.02,   # uplift < this AND prob_control < lost_cause_prob → Lost Cause
+    "lost_cause_prob_threshold":   0.10,   # prob_control < this (combined with uplift) → Lost Cause
+    "sure_thing_prob_threshold":   0.50,   # prob_control >= this → Sure Thing (converts regardless)
+
     # === Campaign type bands (uplift percentile → promo type) ===
     # Used by UpliftInference.target() to assign campaign actions.
     # Keys are percentile thresholds (pct_rank >= key → value), ordered high → low.
