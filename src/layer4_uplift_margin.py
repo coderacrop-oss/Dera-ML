@@ -104,13 +104,13 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
         lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
                            reg_lambda=1.0, min_child_samples=20, subsample=0.8,
                            colsample_bytree=0.8, verbose=-1),
-        method='isotonic', cv=3
+        method='isotonic', cv=5
     )
     mu0 = CalibratedClassifierCV(
         lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
                            reg_lambda=1.0, min_child_samples=20, subsample=0.8,
                            colsample_bytree=0.8, verbose=-1),
-        method='isotonic', cv=3
+        method='isotonic', cv=5
     )
     mu1.fit(treat_data[features], treat_data['converted'])
     mu0.fit(ctrl_data[features],  ctrl_data['converted'])
@@ -936,6 +936,21 @@ def run_layer4(pos_file_path="data/transactions.csv",
         {"champion_version": ref.version, "sha256": ref.sha256, "provenance": ref.provenance}, indent=2))
     log("L4", "l4_serving_complete", champion_version=ref.version, customers=total_cust,
         send_count=int(detail['should_send'].sum()))
+
+    # ── P1: Retraining trigger check ──────────────────────────────────────────
+    try:
+        from retrain_trigger import assess_retrain
+        trigger = assess_retrain(models_root or os.path.dirname(REGISTRY_PATH))
+        if trigger["needs_retrain"]:
+            print("\n⚠️  [Retrain] Retraining recommended:")
+            for r in trigger["reasons"]:
+                print(f"   ❌ {r}")
+            print("   → Run: python src/train_champion.py --store-data STORE:data/file.csv")
+        elif trigger["warnings"]:
+            for w in trigger["warnings"]:
+                print(f"   ℹ️  [Retrain] {w}")
+    except Exception as _e:
+        log("L4", "retrain_trigger_error", error=str(_e), level="WARN")
 
     keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
                  'guardrail_blocked', 'should_send', 'send_window']

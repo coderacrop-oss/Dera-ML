@@ -109,6 +109,15 @@ def _train(args) -> int:
     elif um.get("note"):
         print(f"\n📊 [Model Quality] {um['note']}")
 
+    # ── P1: Print SHAP feature importance ────────────────────────────────────
+    shap_imp = report["challenger"].get("shap_importance", {})
+    if shap_imp and "error" not in shap_imp:
+        print(f"\n🔍 [SHAP] Top-{len(shap_imp)} features driving treatment heterogeneity (tau0):")
+        for feat, imp in shap_imp.items():
+            print(f"   {feat:<35} {imp:.6f}")
+    elif shap_imp.get("error"):
+        print(f"\n🔍 [SHAP] Skipped: {shap_imp['error']}")
+
     cid, token = create_candidate(args.models_root, challenger, report)
     log("L4", "train_candidate_created", candidate_id=cid, stores=[i.store_id for i in inputs],
         compared_against=report["compared_against_version"], gate_passed=report["gate"]["passed"])

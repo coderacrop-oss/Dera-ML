@@ -10,6 +10,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 
 from atomic_io import atomic_write_bytes, atomic_write_text
@@ -44,6 +45,37 @@ def _uplift_metrics_for_holdout(model, ctx, holdout_ids: set) -> dict:
     Y = holdout_cust["converted"].fillna(0).values
     try:
         return compute_uplift_metrics(model, X, T, Y)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _shap_importance(model, ctx, holdout_ids: set) -> dict:
+    """Top-5 feature importances from SHAP on the CATE regressors (tau0/tau1).
+
+    Returns {"feature": importance, ...} sorted descending, or {"error": ...} on failure.
+    SHAP is computed on tau0 (control-side CATE regressor) which is a raw LGBMRegressor.
+    """
+    try:
+        import shap  # optional — only installed in training environment
+    except ImportError:
+        return {"error": "shap not installed"}
+    try:
+        tau0 = getattr(model, "tau0", None)
+        if tau0 is None:
+            return {"error": "model has no tau0 (not an XLearnerModel)"}
+
+        holdout_cust = ctx.cust_agg[ctx.cust_agg["customer_id"].astype(str).isin(holdout_ids)]
+        if len(holdout_cust) < 5:
+            return {"error": "insufficient holdout for SHAP"}
+
+        X = holdout_cust[ctx.features].fillna(0)
+        explainer = shap.TreeExplainer(tau0)
+        shap_vals = explainer.shap_values(X)      # shape (n, p)
+        mean_abs  = np.abs(shap_vals).mean(axis=0)
+        importance = dict(zip(ctx.features, mean_abs.tolist()))
+        # Return top-5 sorted descending
+        top5 = dict(sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:5])
+        return {k: round(v, 6) for k, v in top5.items()}
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -90,6 +122,38 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
         uplift_m = {"note": "proxy mode — Qini≈0 by design (random treatment assignment); skipped"}
 
     challenger_m["uplift_metrics"] = uplift_m
+
+    # Also snapshot champion uplift metrics on the same holdout (for manifest comparison)
+    champion_uplift_m = {}
+    if champion is not None and pooled.label_mode == "real":
+        all_ctx_items = list(pooled.contexts.items())
+        if len(all_ctx_items) == 1:
+            s, ctx = all_ctx_items[0]
+            try:
+                champion_uplift_m = _uplift_metrics_for_holdout(champion, ctx, pooled.holdout_ids[s])
+            except Exception as exc:
+                champion_uplift_m = {"error": str(exc)}
+        else:
+            for s, ctx in all_ctx_items:
+                if len(pooled.holdout_ids[s]) >= 30:
+                    try:
+                        champion_uplift_m = _uplift_metrics_for_holdout(champion, ctx, pooled.holdout_ids[s])
+                        champion_uplift_m["note"] = f"computed on store {s!r} (first store with ≥30 holdout customers)"
+                    except Exception as exc:
+                        champion_uplift_m = {"error": str(exc)}
+                    break
+    if champion_m is not None:
+        champion_m["uplift_metrics"] = champion_uplift_m
+
+    # SHAP feature importance for CATE (tau0 regressor)
+    shap_importance: dict = {}
+    if pooled.label_mode == "real":
+        all_ctx_items = list(pooled.contexts.items())
+        for s, ctx in all_ctx_items:
+            if len(pooled.holdout_ids[s]) >= 10:
+                shap_importance = _shap_importance(challenger, ctx, pooled.holdout_ids[s])
+                break
+    challenger_m["shap_importance"] = shap_importance
 
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
