@@ -142,7 +142,11 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
     propensity.fit(all_data[features], all_data['was_treated'])
 
     print("✅ [X-learner] Training complete (mu0, mu1, tau0, tau1, propensity)")
-    return _with_names(XLearnerModel(mu0, mu1, tau0, tau1, propensity), features)
+    model = _with_names(XLearnerModel(mu0, mu1, tau0, tau1, propensity), features)
+    # feature_baseline_stats is set by train_champion after training,
+    # using customer-level cust_agg so it matches the serving distribution.
+    model.feature_baseline_stats = {}
+    return model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -896,6 +900,26 @@ def run_layer4(pos_file_path="data/transactions.csv",
 
     ctx = build_layer4_context(pos_file_path, promo_response_path, product_cogs_dict, default_cogs)
     _check_features(champion, ctx.features)
+
+    # ── P0: Feature drift detection ───────────────────────────────────────────
+    baseline = getattr(champion, "feature_baseline_stats", {})
+    if baseline:
+        try:
+            from drift_detector import check_drift, print_drift_report
+            drift_report = check_drift(baseline, ctx.cust_agg, ctx.features)
+            print_drift_report(drift_report)
+            log("L4", "drift_check", **{k: v for k, v in drift_report.items()
+                                        if k not in ("per_feature", "recommendation")})
+            # Save drift report alongside model_used.json
+            os.makedirs("data/processed", exist_ok=True)
+            atomic_write_text(
+                "data/processed/drift_report.json",
+                json.dumps(drift_report, indent=2, ensure_ascii=False),
+            )
+        except Exception as _e:
+            print(f"⚠️  [Drift] Could not run drift check: {_e}")
+    else:
+        print("ℹ️  [Drift] Champion has no baseline stats (trained before P0 upgrade) — skipping drift check")
 
     _, detail = decide_for_customers(champion, ctx)
 

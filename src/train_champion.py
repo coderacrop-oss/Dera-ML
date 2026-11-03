@@ -19,6 +19,7 @@ import pandas as pd
 
 from business_config import REGISTRY_PATH
 from candidates import create_candidate, evaluate_candidate
+from data_quality import DataQualityError, print_dq_report, validate_training_data
 from layer4_uplift_margin import _train_xlearner
 from model_registry import ModelRegistry, RegistryError
 from pipeline_logger import log
@@ -65,19 +66,54 @@ def _train(args) -> int:
     champion, ref = _load_champion(registry)
     with _scratch_cwd():
         pooled = build_pooled(inputs, args.holdout_frac, args.seed)
+
+        # ── P0: Data quality validation ───────────────────────────────────────
+        print("\n🔍 [DQ] Validating training data quality...")
+        dq_report = validate_training_data(pooled)   # raises DataQualityError if blocking
+        print_dq_report(dq_report)
+
         treat, ctrl = training_frames(pooled)
         challenger = _train_xlearner(treat, ctrl, pooled.features)
+
+        # ── P0: Compute customer-level feature baseline for drift detection ────
+        try:
+            from drift_detector import compute_baseline
+            train_custs = []
+            for s, ctx in pooled.contexts.items():
+                mask = ctx.cust_agg["customer_id"].astype(str).isin(pooled.train_ids[s])
+                train_custs.append(ctx.cust_agg[mask][[f for f in pooled.features if f in ctx.cust_agg.columns]])
+            all_train_cust = pd.concat(train_custs, ignore_index=True)
+            challenger.feature_baseline_stats = compute_baseline(all_train_cust, pooled.features)
+            print(f"📐 [Drift] Feature baseline computed ({len(pooled.features)} features, customer-level)")
+        except Exception as _e:
+            print(f"⚠️  [Drift] Could not compute baseline: {_e}")
+
         incompatible = champion is not None and not _compatible(champion, pooled.features)
         report = evaluate_candidate(pooled, challenger, None if incompatible else champion, ref,
                                     _training_meta(inputs, pooled, args.holdout_frac, args.seed))
+
     if incompatible:
         report["gate"] = {"passed": False, "growth_pct": None,
                           "reason": "Champion เดิมใช้ฟีเจอร์ชุดอื่น จึงเทียบกับโมเดลใหม่ไม่ได้ — ให้ผู้อนุมัติพิจารณาเอง"}
+
+    # ── P0: Print uplift quality metrics ─────────────────────────────────────
+    um = report["challenger"].get("uplift_metrics", {})
+    if um and "error" not in um and "note" not in um:
+        print(f"\n📊 [Model Quality] Holdout uplift metrics (n={um.get('n_holdout','?')}):")
+        print(f"   Qini coeff : {um.get('qini', 'N/A')}  ({um.get('interpretation','?')})")
+        print(f"   AUUC       : {um.get('auuc', 'N/A')}  (avg incremental conversion rate)")
+        print(f"   ATE pred   : {um.get('ate_pred', 'N/A')}  |  actual: {um.get('ate_actual', 'N/A')}")
+        print(f"   Baseline ECE: {um.get('baseline_ece', 'N/A')}  (calibration error of outcome model)")
+        log("L4", "train_uplift_metrics", **{k: v for k, v in um.items()
+                                              if k not in ("interpretation", "note")})
+    elif um.get("note"):
+        print(f"\n📊 [Model Quality] {um['note']}")
+
     cid, token = create_candidate(args.models_root, challenger, report)
     log("L4", "train_candidate_created", candidate_id=cid, stores=[i.store_id for i in inputs],
         compared_against=report["compared_against_version"], gate_passed=report["gate"]["passed"])
     base = (os.environ.get("CRM_API_PUBLIC_URL") or "http://localhost:8000").rstrip("/")
-    print(f"✅ สร้างโมเดลผู้สมัคร {cid} แล้ว (ยังไม่ได้เปลี่ยน Champion)")
+    print(f"\n✅ สร้างโมเดลผู้สมัคร {cid} แล้ว (ยังไม่ได้เปลี่ยน Champion)")
     print(f"   ผลเทียบ: {report['gate']['reason']}")
     print(f"👉 เปิดหน้าเปรียบเทียบเพื่ออนุมัติ: {base}/v1/models/candidates/{cid}?token={token}")
     print("   (ต้องเปิด CRM API ไว้ จึงจะเปิดลิงก์ได้)")
@@ -108,7 +144,7 @@ def main(argv=None) -> int:
             print(f"✅ ย้อนกลับไปใช้ Champion {args.rollback}")
             return 0
         return _train(args)
-    except (TrainingDataError, RegistryError) as exc:
+    except (TrainingDataError, RegistryError, DataQualityError) as exc:
         print(f"❌ {exc}")
         return 1
 

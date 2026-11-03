@@ -15,6 +15,7 @@ import pandas as pd
 from atomic_io import atomic_write_bytes, atomic_write_text
 from layer4_uplift_margin import decide_for_customers, gate_decision, market_is_recession
 from model_registry import RegistryError
+from uplift_metrics import compute_uplift_metrics
 
 CANDIDATE_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 MIN_HOLDOUT = 100
@@ -28,6 +29,23 @@ def _metrics(frames: list) -> dict:
             "send_count": int(df["should_send"].sum()),
             "blocked_count": int(df["guardrail_blocked"].sum()),
             "do_nothing_pct": float(df["recommended_action"].str.startswith("Do Nothing").mean() * 100) if n else 0.0}
+
+
+def _uplift_metrics_for_holdout(model, ctx, holdout_ids: set) -> dict:
+    """Compute AUUC/Qini/ECE on held-out customers using actual labels from ctx."""
+    holdout_cust = ctx.cust_agg[
+        ctx.cust_agg["customer_id"].astype(str).isin(holdout_ids)
+    ]
+    if len(holdout_cust) < 10 or "was_treated" not in holdout_cust.columns or \
+       "converted" not in holdout_cust.columns:
+        return {"error": "insufficient holdout labels"}
+    X = holdout_cust[ctx.features].fillna(0).values
+    T = holdout_cust["was_treated"].fillna(0).values
+    Y = holdout_cust["converted"].fillna(0).values
+    try:
+        return compute_uplift_metrics(model, X, T, Y)
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta: dict) -> dict:
@@ -47,11 +65,32 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
                        "holdout_customers": int(len(ids))})
         holdout_raw.append(ctx.raw_df[ctx.raw_df["customer_id"].astype(str).isin(ids)][["timestamp", "total_price"]])
     challenger_m = _metrics(ch_frames)
-    champion_m = _metrics(cp_frames) if champion is not None else None
+    champion_m   = _metrics(cp_frames) if champion is not None else None
     is_rec, current_avg = market_is_recession(pd.concat(holdout_raw))
     gate = gate_decision(challenger_m["profit"], champion_m["profit"] if champion_m else None,
                          challenger_m["do_nothing_pct"], is_rec, current_avg)
     holdout_size = sum(s["holdout_customers"] for s in stores)
+
+    # Uplift quality metrics (AUUC, Qini, ECE) — pooled across all stores
+    uplift_m = {}
+    if pooled.label_mode == "real":
+        # Only meaningful with real labels; proxy mode has random treatment → Qini ≈ 0 by design
+        all_ctx_items = list(pooled.contexts.items())
+        if len(all_ctx_items) == 1:
+            s, ctx = all_ctx_items[0]
+            uplift_m = _uplift_metrics_for_holdout(challenger, ctx, pooled.holdout_ids[s])
+        else:
+            # Multi-store: compute on first store with enough holdout
+            for s, ctx in all_ctx_items:
+                if len(pooled.holdout_ids[s]) >= 30:
+                    uplift_m = _uplift_metrics_for_holdout(challenger, ctx, pooled.holdout_ids[s])
+                    uplift_m["note"] = f"computed on store {s!r} (first store with ≥30 holdout customers)"
+                    break
+    else:
+        uplift_m = {"note": "proxy mode — Qini≈0 by design (random treatment assignment); skipped"}
+
+    challenger_m["uplift_metrics"] = uplift_m
+
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "compared_against_version": champion_ref.version if champion_ref else None,
