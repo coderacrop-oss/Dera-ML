@@ -207,7 +207,10 @@ def run_layer2(pos_file_path="data/raw_pos_transactions.csv"):
     if rules.empty:
         print("คำเตือน: ไม่พบ Association Rules ที่ตรงตามเงื่อนไข")
         return None
-    rules = rules.sort_values('lift', ascending=False)
+    rules = rules.sort_values(['lift', 'confidence'], ascending=False)
+    # A->B and B->A are the same pair (same support and lift): keep one row per pair so the top 3 are 3 different bundles
+    rules = rules.assign(_pair=rules.apply(lambda r: frozenset(r['antecedents']) | frozenset(r['consequents']), axis=1))
+    rules = rules.drop_duplicates('_pair').drop(columns='_pair')
     top = rules[['antecedents', 'consequents', 'support', 'confidence', 'lift']].head(3).copy()
     top['antecedents'] = top['antecedents'].apply(lambda x: list(x)[0] if len(x) == 1 else str(x))
     top['consequents'] = top['consequents'].apply(lambda x: list(x)[0] if len(x) == 1 else str(x))
