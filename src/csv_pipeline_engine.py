@@ -218,10 +218,69 @@ def layer2_csv_mba(df, segments, df_rfm):
 
         enriched_segments.append(seg)
 
+    # ── Per-customer preference profile ──────────────────────────────────────
+    # สร้าง individual preference สำหรับ insight รายคน
+    # (ไม่ส่งผลต่อ campaign decision — export แยกเพื่อ insight เท่านั้น)
+    pref_rows = []
+    cust_df = df.copy()
+    cust_df["customer_id"] = cust_df["customer_id"].astype(str)
+
+    for cid, grp in cust_df.groupby("customer_id"):
+        # top-3 products by purchase frequency
+        prod_counts = grp["product_name"].value_counts()
+        top3 = prod_counts.index.tolist()[:3]
+        top3 += [None] * (3 - len(top3))  # pad to length 3
+
+        # personal basket: invoices ที่มีมากกว่า 1 product → personal co-occurrence
+        cid_invoices = grp["invoice_id"].unique()
+        cid_basket = basket_bool.loc[basket_bool.index.isin(cid_invoices)]
+        personal_pair_a, personal_pair_b = None, None
+        personal_pair_count = 0
+        if len(cid_basket) >= 1 and cid_basket.shape[1] >= 2:
+            cid_co = cid_basket.T.dot(cid_basket)
+            cid_co_np = cid_co.to_numpy().copy()
+            np.fill_diagonal(cid_co_np, 0)
+            cid_co = pd.DataFrame(cid_co_np, index=cid_co.index, columns=cid_co.columns)
+            if cid_co.stack().sum() > 0:
+                idx = cid_co.stack().idxmax()
+                personal_pair_a = idx[0]
+                personal_pair_b = idx[1]
+                personal_pair_count = int(cid_co.loc[idx[0], idx[1]])
+
+        # recency: last purchase date
+        last_date = grp["transaction_date"].max()
+        if hasattr(last_date, "date"):
+            last_date = str(last_date.date())
+
+        # avg basket size (items per visit)
+        avg_basket = round(
+            grp.groupby("invoice_id")["product_name"].count().mean(), 1
+        )
+
+        pref_rows.append({
+            "customer_id":       cid,
+            "top_product_1":     top3[0],
+            "top_product_2":     top3[1],
+            "top_product_3":     top3[2],
+            "personal_pair_a":   personal_pair_a,
+            "personal_pair_b":   personal_pair_b,
+            "personal_pair_times": personal_pair_count if personal_pair_count else None,
+            "purchase_freq":     len(grp["invoice_id"].unique()),
+            "avg_basket_size":   avg_basket,
+            "last_purchased":    last_date,
+        })
+
+    pref_df = pd.DataFrame(pref_rows)
+    os.makedirs("data/processed", exist_ok=True)
+    pref_path = "data/processed/layer2_customer_preferences.csv"
+    pref_df.to_csv(pref_path, index=False)
+    print(f"👤 [Layer 2] Customer preferences: {len(pref_df)} คน → {pref_path}")
+
     log("L2", "mba_complete",
         segments_enriched=len(enriched_segments),
         top_global_pair=f"{global_a} + {global_b}",
-        top_global_cooccurrence=global_count)
+        top_global_cooccurrence=global_count,
+        customer_preferences_exported=len(pref_df))
     return enriched_segments, df_rfm
 
 # ==========================================
