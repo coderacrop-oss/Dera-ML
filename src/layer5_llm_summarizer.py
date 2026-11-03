@@ -1,5 +1,4 @@
 import re
-import ollama
 
 def _fmt_num(value, fmt=",.2f"):
     """Format number safely, return '-' if None."""
@@ -166,6 +165,114 @@ def _validate_output(output: str, payload: dict) -> list:
     return warnings
 
 
+def _generate_template_report(payload: dict) -> str:
+    """
+    Static structured report used when ollama is unavailable or not running.
+    Fills real numbers from payload — not a placeholder, a usable fallback.
+    """
+    meta     = payload.get("metadata", {})
+    summary  = payload.get("campaign_financial_summary", {})
+    bcast    = payload.get("broadcast_summary", {})
+    segments = payload.get("target_segments", [])
+
+    planning_month = meta.get("planning_month") or payload.get("planning_month", "-")
+    engine_ver     = meta.get("engine_version") or payload.get("campaign_name", "-")
+    total_cust     = meta.get("total_unique_customers", "-")
+    total_tx       = meta.get("total_transactions", "-")
+
+    lines = []
+    lines.append("# Campaign Action Plan")
+    lines.append(f"> ⚠️ *รายงานนี้สร้างจาก template อัตโนมัติ เนื่องจาก LLM (ollama) ไม่พร้อมใช้งาน*")
+    lines.append(f"> *ติดตั้ง ollama และรัน `ollama pull llama3.2:3b` เพื่อเปิดใช้ AI narrative*\n")
+
+    # 1. Overview
+    lines.append("## 1. สรุปภาพรวม")
+    lines.append(f"- **เดือน:** {planning_month}")
+    lines.append(f"- **Engine:** {engine_ver}")
+    if total_cust != "-": lines.append(f"- **ลูกค้าทั้งหมด:** {total_cust:,} คน" if isinstance(total_cust, int) else f"- **ลูกค้าทั้งหมด:** {total_cust} คน")
+    if total_tx != "-":   lines.append(f"- **ธุรกรรม:** {total_tx:,} รายการ" if isinstance(total_tx, int) else f"- **ธุรกรรม:** {total_tx} รายการ")
+    if bcast:
+        lines.append(f"- **⚡ Broadcast อนุมัติ:** {bcast.get('total_broadcast', '-')} คน | Suppressed: {bcast.get('total_suppressed', '-')} คน ({bcast.get('suppression_rate_pct', '-')}%)")
+    lines.append("")
+
+    # 2. Per-segment strategy
+    lines.append("## 2. กลยุทธ์แคมเปญรายกลุ่ม")
+    for seg in segments:
+        ue     = seg.get("unit_economics", {})
+        audit  = seg.get("promo_audit", {})
+        ab     = seg.get("ab_testing", {})
+        name   = seg.get("segment_name", "-")
+        count  = seg.get("customer_count", "-")
+        bc     = seg.get("broadcast_count")
+        sup    = seg.get("suppressed_count")
+        profit = ue.get("total_segment_projected_profit") or ue.get("total_projected_profit")
+
+        lines.append(f"### {name}")
+        if bc is not None:
+            lines.append(f"- **จำนวน:** {count} คน | ⚡ ส่งได้: {bc} | Suppressed: {sup} ({seg.get('suppression_rate', 0)}%)")
+        else:
+            lines.append(f"- **จำนวน:** {count} คน")
+        lines.append(f"- **RFM:** recency {seg.get('avg_recency_days', '-')} วัน | frequency {seg.get('avg_frequency', '-')} ครั้ง | AOV ${_fmt_num(seg.get('avg_monetary'))}")
+        lines.append(f"- **ข้อเสนอ:** {seg.get('promo_desc') or seg.get('recommended_promo', '-')}")
+        lines.append(f"- **Net Profit/Head:** ${_fmt_num(ue.get('net_profit_per_head'))} | Margin: {audit.get('margin_health') or ue.get('financial_status', '-')}")
+        if profit is not None: lines.append(f"- **Projected Profit:** ${_fmt_num(profit)}")
+        if ab: lines.append(f"- **A/B Split:** Treatment {ab.get('treatment_group_count')} / Control {ab.get('control_group_count')}")
+        lines.append(f"- **กำหนดส่ง:** {seg.get('send_schedule', '-')} | ระยะเวลา: {seg.get('campaign_duration', '-')}")
+        lines.append("")
+
+    # 3. Execution plan (generic)
+    lines.append("## 3. แผนปฏิบัติการ")
+    lines.append("| สัปดาห์ | กิจกรรม |")
+    lines.append("|---------|---------|")
+    lines.append("| Week 1 | ส่ง notification ตาม broadcast_list.csv — ช่อง LINE/SMS |")
+    lines.append("| Week 2 | ติดตามผู้ที่ยังไม่ตอบสนอง — ส่ง reminder ให้กลุ่ม At-Risk |")
+    lines.append("| Week 3 | วัดผล A/B holdout: เปรียบเทียบ conversion rate treatment vs control |")
+    lines.append("| Week 4 | สรุปผล — บันทึก actual vs forecast เข้า model retrain cycle |")
+    lines.append("")
+
+    # 4. Financial summary table
+    lines.append("## 4. ตารางสรุปการเงิน")
+    lines.append("| กลุ่ม | ทั้งหมด | Broadcast | Suppressed | AOV | Profit/Head | Projected Profit | Margin |")
+    lines.append("|------|---------|-----------|------------|-----|-------------|-----------------|--------|")
+    for seg in segments:
+        ue     = seg.get("unit_economics", {})
+        audit  = seg.get("promo_audit", {})
+        profit = ue.get("total_segment_projected_profit") or ue.get("total_projected_profit")
+        lines.append(
+            f"| {seg.get('segment_name', '-')} "
+            f"| {seg.get('customer_count', '-')} "
+            f"| {seg.get('broadcast_count', '-')} "
+            f"| {seg.get('suppressed_count', '-')} "
+            f"| ${_fmt_num(seg.get('avg_monetary'))} "
+            f"| ${_fmt_num(ue.get('net_profit_per_head'))} "
+            f"| ${_fmt_num(profit)} "
+            f"| {audit.get('margin_health') or ue.get('financial_status', '-')} |"
+        )
+
+    total_profit = summary.get("grand_total_projected_profit") or payload.get("total_campaign_projected_profit", "-")
+    lines.append(f"\n**Total Projected Profit: {_fmt_num(total_profit) if isinstance(total_profit, (int, float)) else total_profit}**")
+    lines.append(f"**Gate Status: {summary.get('validation_gate_status') or payload.get('gate_status', '-')}**")
+    lines.append("")
+
+    # 5. Forecast
+    lines.append("## 5. การคาดการณ์และ KPIs")
+    for seg in segments:
+        fcst = seg.get("post_campaign_forecast", {})
+        hist = seg.get("historical_metrics", {})
+        if not fcst and not hist:
+            continue
+        lines.append(f"**{seg.get('segment_name', '-')}**")
+        if hist:
+            lines.append(f"- Historical retention: {hist.get('retention_rate_pct')}% | repeat: {hist.get('repeat_purchase_rate_pct')}%")
+        if fcst:
+            lines.append(f"- Projected retention: {fcst.get('projected_retention_rate_pct')}% (+{fcst.get('retention_uplift_assumption_pct')}%) | repeat: {fcst.get('projected_repeat_purchase_rate_pct')}% (+{fcst.get('repeat_uplift_assumption_pct')}%)")
+        lines.append("")
+
+    lines.append("**KPIs ที่ต้องวัด:** Incremental Revenue Lift, Net Profit Lift, A/B Conversion Rate Delta")
+
+    return "\n".join(lines)
+
+
 def generate_campaign_action_plan(payload: dict) -> str:
     system_prompt = (
         "You are a senior CFO and CMO specializing in retail e-commerce strategy. "
@@ -211,8 +318,16 @@ def generate_campaign_action_plan(payload: dict) -> str:
     formatted_data = _format_payload(payload)
     user_prompt = f"เขียน Campaign Action Plan จากข้อมูลต่อไปนี้:\n\n{formatted_data}"
 
+    # Lazy import: ไม่ crash ถ้า ollama ไม่ได้ติดตั้ง
     try:
-        response = ollama.chat(
+        import ollama as _ollama
+    except ImportError:
+        print("⚠️  [Layer 5] ollama ไม่ได้ติดตั้ง — ใช้ template report แทน")
+        print("   ติดตั้ง: pip install ollama && ollama pull llama3.2:3b")
+        return _generate_template_report(payload)
+
+    try:
+        response = _ollama.chat(
             model="llama3.2:3b",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -242,4 +357,5 @@ def generate_campaign_action_plan(payload: dict) -> str:
             return output + warn_block
         return output
     except Exception as e:
-        return f"❌ LLM Error: {str(e)}"
+        print(f"⚠️  [Layer 5] ollama ไม่ตอบสนอง ({type(e).__name__}: {e}) — ใช้ template report แทน")
+        return _generate_template_report(payload)
