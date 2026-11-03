@@ -203,3 +203,115 @@ def _interpret(qini: float, auuc_val: float) -> str:
     if qini < 0.20:
         return "strong uplift model — clear targeting signal"
     return "excellent uplift model"
+
+
+# ── Training data quality assessment ──────────────────────────────────────────
+#
+# Uplift models fail silently when the training data is confounded:
+#   - tiny control groups → ATE estimate dominated by noise
+#   - non-random treatment → model learns selection bias, not causal effect
+#   - negative ATE → proxy control may not represent true counterfactual
+#
+# These checks run on holdout metrics (same ratio as training) and surface
+# issues BEFORE a human approves the candidate as champion.
+
+_CTRL_RATIO_BLOCK = 0.05   # < 5% control  → hard block (statistically unreliable)
+_CTRL_RATIO_WARN  = 0.15   # < 15% control → soft warning
+_ATE_NEG_BLOCK    = -0.10  # ATE < -10pp   → likely confounded control group
+_ATE_BIAS_WARN    = 0.50   # |bias/actual| > 50% → model poorly calibrated
+_MIN_WINDOW_WARN  = 30     # < 30 days      → thin temporal signal
+
+
+def training_data_quality(um: dict, window_days: int | None = None) -> dict:
+    """
+    Assess whether the training data is reliable enough for an uplift model.
+
+    Parameters
+    ──────────
+    um          : dict from compute_uplift_metrics()
+    window_days : total days of training data (optional, from raw_df timestamps)
+
+    Returns
+    ───────
+    {
+      "passed":   bool,      # False → gate should block this candidate
+      "blocks":   [str],     # hard reasons that trigger a fail
+      "warnings": [str],     # soft concerns for the reviewer
+    }
+    """
+    if "error" in um or not um or "n_control" not in um:
+        # No metrics available (proxy mode, insufficient holdout, etc.) — skip DQ checks
+        return {"passed": True, "blocks": [], "warnings": []}
+
+    blocks:   list[str] = []
+    warnings: list[str] = []
+
+    n_ctrl  = um.get("n_control", 0) or 0
+    n_treat = um.get("n_treated", 0) or 0
+    n_total = n_ctrl + n_treat
+    ctrl_ratio = n_ctrl / n_total if n_total > 0 else 0.0
+
+    ate_actual = um.get("ate_actual")
+    ate_bias   = um.get("ate_bias")
+
+    # ── Control group size ────────────────────────────────────────────────────
+    if ctrl_ratio < _CTRL_RATIO_BLOCK:
+        blocks.append(
+            f"Control group too small: {n_ctrl}/{n_total} = {ctrl_ratio:.1%} "
+            f"(minimum {_CTRL_RATIO_BLOCK:.0%}). "
+            f"Uplift estimates are statistically unreliable — "
+            f"collect more data with a proper control group."
+        )
+    elif ctrl_ratio < _CTRL_RATIO_WARN:
+        warnings.append(
+            f"Control group is small: {n_ctrl}/{n_total} = {ctrl_ratio:.1%} "
+            f"(recommend ≥ {_CTRL_RATIO_WARN:.0%}). "
+            f"Uplift estimates may have high variance."
+        )
+
+    # ── ATE direction ─────────────────────────────────────────────────────────
+    if ate_actual is not None and not np.isnan(ate_actual):
+        if ate_actual < _ATE_NEG_BLOCK:
+            blocks.append(
+                f"Negative ATE: treatment effect = {ate_actual:+.3f} "
+                f"(threshold {_ATE_NEG_BLOCK:+.2f}). "
+                f"This suggests the control group is confounded — "
+                f"it may not represent a true counterfactual. "
+                f"Serving with this model could systematically suppress good targets."
+            )
+        elif ate_actual < 0:
+            warnings.append(
+                f"ATE is slightly negative ({ate_actual:+.3f}). "
+                f"Could indicate confounding or that treatment genuinely hurts average conversion. "
+                f"Verify control group composition before promoting."
+            )
+
+    # ── ATE calibration ───────────────────────────────────────────────────────
+    if (ate_actual is not None and ate_bias is not None
+            and not np.isnan(ate_actual) and not np.isnan(ate_bias)
+            and abs(ate_actual) > 0.01):
+        rel_bias = abs(ate_bias) / abs(ate_actual)
+        if rel_bias > _ATE_BIAS_WARN:
+            warnings.append(
+                f"ATE prediction is poorly calibrated: "
+                f"pred={um.get('ate_pred'):+.3f}, actual={ate_actual:+.3f} "
+                f"({rel_bias:.0%} relative error). "
+                f"Profit estimates derived from this model may be inaccurate."
+            )
+
+    # ── Data window ───────────────────────────────────────────────────────────
+    if window_days is not None and window_days < _MIN_WINDOW_WARN:
+        warnings.append(
+            f"Short training window: {window_days} days "
+            f"(recommend ≥ {_MIN_WINDOW_WARN} days). "
+            f"RFM features and temporal patterns may not be reliable."
+        )
+
+    return {
+        "passed":   len(blocks) == 0,
+        "blocks":   blocks,
+        "warnings": warnings,
+        "ctrl_ratio": round(ctrl_ratio, 4),
+        "n_control":  n_ctrl,
+        "n_treated":  n_treat,
+    }

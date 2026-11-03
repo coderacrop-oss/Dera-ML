@@ -141,6 +141,21 @@ def _train(args) -> int:
     elif um.get("note"):
         print(f"\n📊 [Model Quality] {um['note']}")
 
+    # ── P0: Print training data quality assessment ────────────────────────────
+    dq = report.get("data_quality", {})
+    if dq.get("blocks"):
+        print(f"\n🚨 [Data Quality] HARD BLOCK — candidate cannot be champion:")
+        for b in dq["blocks"]:
+            print(f"   ❌ {b}")
+    if dq.get("warnings"):
+        print(f"\n⚠️  [Data Quality] Warnings:")
+        for w in dq["warnings"]:
+            print(f"   ⚠️  {w}")
+    if dq and not dq.get("blocks") and not dq.get("warnings"):
+        ctrl_pct = dq.get("ctrl_ratio", 0) * 100
+        print(f"\n✅ [Data Quality] Training data looks reliable "
+              f"(control={dq.get('n_control','?')}/{dq.get('n_control',0)+dq.get('n_treated',0)} = {ctrl_pct:.1f}%)")
+
     # ── P1: Print SHAP feature importance ────────────────────────────────────
     shap_imp = report["challenger"].get("shap_importance", {})
     if shap_imp and "error" not in shap_imp:

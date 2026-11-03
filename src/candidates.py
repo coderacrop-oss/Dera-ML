@@ -16,7 +16,7 @@ import pandas as pd
 from atomic_io import atomic_write_bytes, atomic_write_text
 from uplift_engine import decide_for_customers, gate_decision, market_is_recession
 from model_registry import RegistryError
-from uplift_metrics import compute_uplift_metrics
+from uplift_metrics import compute_uplift_metrics, training_data_quality
 
 CANDIDATE_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 MIN_HOLDOUT = 100
@@ -179,6 +179,35 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
         champion_m["uplift_metrics"] = champion_uplift_m
     challenger_m["shap_importance"] = shap_importance
 
+    # ── Training data quality gate ────────────────────────────────────────────
+    # Checks control group size, ATE direction, and data window.
+    # A hard block overrides the profit gate so a confounded model can't slip
+    # through just because its profit estimate looks good on holdout.
+    window_days = None
+    try:
+        all_ts = pd.concat([
+            pd.to_datetime(ctx.raw_df["timestamp"], errors="coerce")
+            for ctx in pooled.contexts.values()
+        ]).dropna()
+        if len(all_ts) > 0:
+            window_days = int((all_ts.max() - all_ts.min()).days)
+    except Exception:
+        pass
+
+    dq = training_data_quality(uplift_m if pooled.label_mode == "real" else {}, window_days)
+
+    if not dq["passed"] and gate.passed:
+        # Hard-block: data quality failure overrides a passing profit gate
+        from uplift_engine import GateResult
+        gate = GateResult(
+            passed=False,
+            reason=(
+                "❌ [Data Quality] Profit gate passed but training data is unreliable — "
+                + "; ".join(dq["blocks"])
+            ),
+            growth_pct=gate.growth_pct,
+        )
+
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "compared_against_version": champion_ref.version if champion_ref else None,
@@ -192,6 +221,7 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
         "per_store": per_store,
         "gate": {"passed": bool(gate.passed), "reason": gate.reason,
                  "growth_pct": None if gate.growth_pct is None else float(gate.growth_pct)},
+        "data_quality": dq,
         "training": training_meta,
     }
 

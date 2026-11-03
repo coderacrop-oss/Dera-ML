@@ -55,7 +55,7 @@ def test_report_numbers_equal_recomputation_on_holdout(world):
 def test_report_has_all_keys_and_label_mode(world):
     r = evaluate_candidate(world["pooled"], world["challenger"], world["champion"], world["ref"], world["meta"])
     for k in ("created_at", "compared_against_version", "label_mode", "provenance", "holdout_size", "holdout_warning",
-              "stores", "champion", "challenger", "per_store", "gate", "training"):
+              "stores", "champion", "challenger", "per_store", "gate", "data_quality", "training"):
         assert k in r
     assert r["compared_against_version"] == "v3" and r["label_mode"] == "proxy" and r["provenance"] == "proxy-labels"
     assert {s["store_id"] for s in r["stores"]} == {"shop-a", "shop-b"}
