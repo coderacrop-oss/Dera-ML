@@ -1,5 +1,41 @@
 import re
 
+
+def _segment_tone(segment_name: str) -> dict:
+    """Return tone guide for this segment based on its name."""
+    n = segment_name.lower()
+    if "champion" in n:
+        return {
+            "tone_key": "exclusive_insider",
+            "th_instruction": "สื่อสารในฐานะสมาชิก VIP — ห้ามใช้คำ 'ลดราคา'/'โปรโมชั่น' ใช้ 'สิทธิพิเศษเฉพาะคุณ'/'ก่อนใคร'/'ขอบคุณที่ไว้วางใจเรา'",
+            "message_frame": "ขอบคุณความภักดี — เสนอ VIP experience ไม่ใช่ deal",
+        }
+    if "at-risk" in n or "churn" in n:
+        return {
+            "tone_key": "win_back",
+            "th_instruction": "ใช้ empathy + urgency เล็กน้อย — 'เราคิดถึงคุณ' ระบุ offer ชัดเจน (ลด X%) บอกว่าหมดอายุเมื่อไหร่",
+            "message_frame": "win-back — แสดงว่าร้านยังจำเขา และมี offer คุ้มค่ารอ",
+        }
+    if "hibernat" in n:
+        return {
+            "tone_key": "reactivation",
+            "th_instruction": "ใช้ emotional hook ก่อน บอกว่าอะไรใหม่ที่ร้าน จากนั้นค่อยระบุ incentive ที่แรงกว่าปกติ",
+            "message_frame": "reactivation — สิ่งที่เปลี่ยนไป + incentive ดึงกลับ",
+        }
+    if "promis" in n or "recent" in n:
+        return {
+            "tone_key": "early_nurture",
+            "th_instruction": "สื่อสารอบอุ่น ต้อนรับ บอก benefit ที่จะได้ถ้าซื้อต่อเนื่อง ไม่กดดัน",
+            "message_frame": "nurture — แนะนำว่าซื้อต่อแล้วได้อะไร",
+        }
+    # mid / potential loyalist / default
+    return {
+        "tone_key": "upsell_nudge",
+        "th_instruction": "ใช้ progress framing — 'คุณอยู่แค่ X บาทจาก tier ถัดไป' หรือ bundle deal เล็กน้อย ไม่กดดัน",
+        "message_frame": "upsell nudge — progress toward next tier + bundle offer",
+    }
+
+
 def _fmt_num(value, fmt=",.2f"):
     """Format number safely, return '-' if None."""
     try:
@@ -53,6 +89,9 @@ def _format_payload(payload: dict) -> str:
         seg_name = seg.get('segment_name', '-')
         lines.append(f"--- [SEGMENT_NAME_EXACT: {seg_name}] (Cluster {seg.get('cluster_id', '-')}) ---")
         lines.append(f"⚠️ ใช้ชื่อกลุ่มนี้ตรงๆ ห้ามเปลี่ยน: {seg_name}")
+        tone = _segment_tone(seg_name)
+        lines.append(f"[TONE_GUIDE: {tone['tone_key']}] {tone['th_instruction']}")
+        lines.append(f"[MESSAGE_FRAME: {tone['message_frame']}]")
         total_count    = seg.get('customer_count', '-')
         broadcast_count = seg.get('broadcast_count')
         suppressed_count = seg.get('suppressed_count')
@@ -214,6 +253,8 @@ def _generate_template_report(payload: dict) -> str:
             lines.append(f"- **จำนวน:** {count} คน")
         lines.append(f"- **RFM:** recency {seg.get('avg_recency_days', '-')} วัน | frequency {seg.get('avg_frequency', '-')} ครั้ง | AOV ${_fmt_num(seg.get('avg_monetary'))}")
         lines.append(f"- **ข้อเสนอ:** {seg.get('promo_desc') or seg.get('recommended_promo', '-')}")
+        tone = _segment_tone(name)
+        lines.append(f"- **กลยุทธ์การสื่อสาร ({tone['tone_key']}):** {tone['message_frame']}")
         lines.append(f"- **Net Profit/Head:** ${_fmt_num(ue.get('net_profit_per_head'))} | Margin: {audit.get('margin_health') or ue.get('financial_status', '-')}")
         if profit is not None: lines.append(f"- **Projected Profit:** ${_fmt_num(profit)}")
         if ab: lines.append(f"- **A/B Split:** Treatment {ab.get('treatment_group_count')} / Control {ab.get('control_group_count')}")
@@ -287,6 +328,7 @@ def generate_campaign_action_plan(payload: dict) -> str:
         "และ **Layer 4 Broadcast Summary** (⚡): จำนวนลูกค้าที่ผ่าน CFO guardrail ทั้งหมด vs ถูก suppress ทั้งหมด\n\n"
 
         "## 2. กลยุทธ์แคมเปญรายกลุ่ม\n"
+        "CRITICAL: Each segment has a [TONE_GUIDE] and [MESSAGE_FRAME] tag. You MUST follow the tone for that segment's rationale and offer description. Champions must NEVER receive promotional discount language. At-Risk must feel 'we miss you' not 'here is a deal'. Hibernating needs emotional hook first.\n\n"
         "สำหรับแต่ละ segment เขียนเป็น **bullet list กระชับ** (ห้ามใช้ subheadings ####) ดังนี้:\n"
         "- **ชื่อกลุ่ม**: (ใช้ชื่อตรงๆ จาก SEGMENT_NAME_EXACT)\n"
         "- **จำนวน**: X คน | Layer 4: ส่งได้ X คน / Suppressed X คน (X%)\n"

@@ -1,4 +1,4 @@
-from layer4_uplift_margin import _load_real_labels
+from uplift_engine import _load_real_labels
 
 
 def _write(tmp_path, ids):

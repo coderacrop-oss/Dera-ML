@@ -4,7 +4,7 @@ import pickle
 import pandas as pd
 import pytest
 
-import layer4_uplift_margin as l4
+import uplift_engine as l4
 from candidates import (candidate_model_bytes, check_token, create_candidate, evaluate_candidate, load_candidate,
                         mark_candidate)
 from fixtures_pos import make_pos_csv

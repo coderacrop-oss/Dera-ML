@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from campaign_scheduler import detect_hours
-from layer4_uplift_margin import run_layer3
+from uplift_engine import _run_layer3 as run_layer3
 from peak_hours import load_peak_hours
 
 # transactions per Bangkok hour -> peak (mean+0.5*std) is {12, 18, 19}

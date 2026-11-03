@@ -1,7 +1,7 @@
 """Layer 4 turns each customer's post_promo_visit into a 0/1 'converted' label. It must not destroy a label that is already 0/1."""
 import pandas as pd
 
-from layer4_uplift_margin import _load_real_labels
+from uplift_engine import _load_real_labels
 
 
 def _pos(tmp_path, per_customer):

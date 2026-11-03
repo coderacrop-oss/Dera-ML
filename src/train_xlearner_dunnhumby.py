@@ -15,7 +15,7 @@ import lightgbm as lgb
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.dirname(__file__))
-from layer4_uplift_margin import XLearnerModel
+from uplift_engine import XLearnerModel
 from business_config import REGISTRY_PATH
 from evaluate import UpliftEvaluator
 

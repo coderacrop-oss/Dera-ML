@@ -22,7 +22,7 @@ from sklearn.preprocessing import LabelEncoder
 sys.path.insert(0, os.path.dirname(__file__))
 from business_config import REGISTRY_PATH
 from evaluate import UpliftEvaluator
-from layer4_uplift_margin import XLearnerModel, _train_xlearner
+from uplift_engine import XLearnerModel, _train_xlearner
 
 # ---------------------------------------------------------------------------
 # Optional torch import — DragonNet requires it
@@ -194,13 +194,13 @@ class DragonNetWrapper:
 
 
 # ---------------------------------------------------------------------------
-# X-Learner wrapper (thin adaptor over layer4_uplift_margin._train_xlearner)
+# X-Learner wrapper (thin adaptor over uplift_engine._train_xlearner)
 # ---------------------------------------------------------------------------
 
 class XLearnerWrapper:
     """
     Thin adaptor: shapes numpy arrays into DataFrames and delegates
-    to layer4_uplift_margin._train_xlearner, then wraps the returned
+    to uplift_engine._train_xlearner, then wraps the returned
     XLearnerModel.  Exposes predict_uplift(X) -> np.ndarray.
     """
 

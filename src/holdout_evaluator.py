@@ -257,7 +257,7 @@ def evaluate_holdout(
     report["retrain_labels_path"] = labeled_path
     report["retrain_labels_count"] = len(labeled_df)
     report["retrain_note"] = (
-        f"Pass '{labeled_path}' as --promo-response to csv_pipeline_engine.py "
+        f"Pass '{labeled_path}' as --promo-response to campaign_pipeline.py "
         f"or as promo_response_path= in run_layer4() to use real campaign outcomes "
         f"as training labels in the next pipeline cycle."
     )

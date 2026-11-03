@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-import layer4_uplift_margin as l4
+import uplift_engine as l4
 from candidates import candidate_model_bytes, load_candidate
 from fixtures_pos import make_pos_csv
 from model_registry import ModelRegistry
@@ -73,7 +73,7 @@ def test_train_honors_public_url_and_never_touches_registry(env, capsys, monkeyp
 
 
 def test_import_legacy_then_train_compares_against_v1(env, capsys):
-    ctx = l4.build_layer4_context(env["a"], None)
+    ctx = l4.build_serving_context(env["a"], None)
     model = l4._train_xlearner(ctx.raw_df[ctx.raw_df["was_treated"] == 1],
                                ctx.raw_df[ctx.raw_df["was_treated"] == 0], ctx.features)
     del model.feature_names_  # a legacy champion never recorded its feature names

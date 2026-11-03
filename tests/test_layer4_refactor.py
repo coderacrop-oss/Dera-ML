@@ -4,7 +4,7 @@ import os
 import pandas as pd
 import pytest
 
-import layer4_uplift_margin as l4
+import uplift_engine as l4
 from fixtures_pos import make_pos_csv
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden", "layer4_basic.csv")
@@ -31,7 +31,7 @@ def _trained(ctx):
 
 def test_decide_for_customers_matches_golden(workdir):
     csv = make_pos_csv(workdir, n_customers=120, seed=0)
-    ctx = l4.build_layer4_context(csv, None)
+    ctx = l4.build_serving_context(csv, None)
     profit, detail = l4.decide_for_customers(_trained(ctx), ctx)
     golden = pd.read_csv(GOLDEN, dtype={"customer_id": str})
     pd.testing.assert_frame_equal(_sorted(detail), golden, check_dtype=False, rtol=1e-6)
@@ -39,26 +39,26 @@ def test_decide_for_customers_matches_golden(workdir):
 
 
 def test_decide_for_customers_filters_ids(workdir):
-    ctx = l4.build_layer4_context(make_pos_csv(workdir), None)
+    ctx = l4.build_serving_context(make_pos_csv(workdir), None)
     _, detail = l4.decide_for_customers(_trained(ctx), ctx, {"c001"})
     assert list(detail["customer_id"]) == ["c001"]
 
 
 def test_decide_for_customers_with_no_matching_ids_is_empty_not_a_crash(workdir):
-    ctx = l4.build_layer4_context(make_pos_csv(workdir), None)
+    ctx = l4.build_serving_context(make_pos_csv(workdir), None)
     profit, detail = l4.decide_for_customers(_trained(ctx), ctx, {"nobody"})
     assert profit == 0.0 and len(detail) == 0 and "should_send" in detail.columns
 
 
 def test_trained_model_has_feature_names(workdir):
-    ctx = l4.build_layer4_context(make_pos_csv(workdir), None)
+    ctx = l4.build_serving_context(make_pos_csv(workdir), None)
     assert _trained(ctx).feature_names_ == ctx.features
 
 
 def test_context_label_mode(workdir):
-    assert l4.build_layer4_context(make_pos_csv(workdir), None).label_mode == "proxy"
+    assert l4.build_serving_context(make_pos_csv(workdir), None).label_mode == "proxy"
     csv = make_pos_csv(workdir, with_labels=True, name="lab.csv")
-    assert l4.build_layer4_context(csv, csv).label_mode == "real"
+    assert l4.build_serving_context(csv, csv).label_mode == "real"
 
 
 G = l4.gate_decision

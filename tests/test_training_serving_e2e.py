@@ -7,7 +7,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-import layer4_uplift_margin as l4
+import uplift_engine as l4
+import campaign_pipeline as cp
 from crm_api.app import create_app
 from crm_api.settings import Settings
 from fixtures_pos import make_pos_csv
@@ -37,7 +38,7 @@ def test_full_flow(tmp_path, monkeypatch, capsys):
 
     def serve():
         before = _tree_hash(models)
-        l4.run_layer4(a, None, models_root=models)
+        cp.run_layer4(a, None, models_root=models)
         assert _tree_hash(models) == before, "a serving run changed the models directory"
         return json.loads((tmp_path / "data" / "processed" / "model_used.json").read_text())["champion_version"]
 

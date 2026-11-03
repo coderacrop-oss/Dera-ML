@@ -84,4 +84,14 @@ CONFIG = {
     "business_tz":     "Asia/Bangkok",
     "peak_hour_start": 17,   # 5 pm (inclusive)
     "peak_hour_end":   21,   # 9 pm (inclusive)
+
+    # === Cluster-tier promo rates ===
+    # Maps cluster tier name → rate key from promo_cost_rates
+    "cluster_promo_rates": {
+        "champions":   "vip_points",   # no % discount — loyalty/VIP only
+        "at_risk":     "standard",
+        "hibernating": "off_peak",     # deeper discount for reactivation
+        "mid":         "bundle",
+    },
+    "hibernating_recency_days": 90,    # recency > this → hibernating/lost_cause threshold
 }

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from atomic_io import atomic_write_bytes, atomic_write_text
-from layer4_uplift_margin import decide_for_customers, gate_decision, market_is_recession
+from uplift_engine import decide_for_customers, gate_decision, market_is_recession
 from model_registry import RegistryError
 from uplift_metrics import compute_uplift_metrics
 
