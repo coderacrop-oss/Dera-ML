@@ -12,6 +12,7 @@ from layer5_llm_summarizer import generate_campaign_action_plan
 from business_config import CONFIG
 from pipeline_logger import log
 from crm_export import export_customer_segments_safe, export_segments_safe
+from model_registry import ModelRegistry, RegistryError
 
 # ==========================================
 # Layer 0: CSV Data Loader & Preprocessing
@@ -488,6 +489,9 @@ if __name__ == "__main__":
     log("L0", "pipeline_start", csv_file=csv_file)
     _pipeline_start = time.monotonic()
     try:
+        # Serving needs an approved champion; check before writing anything (training is a separate command).
+        from layer4_uplift_margin import REGISTRY_PATH as _REGISTRY_PATH
+        ModelRegistry(os.path.dirname(_REGISTRY_PATH)).load_current()
         from layer4_uplift_margin import run_layer4
 
         _t0 = time.monotonic()
@@ -503,7 +507,6 @@ if __name__ == "__main__":
         _t0 = time.monotonic()
         _rows_in = int(df_rfm["customer_id"].nunique())
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
-        export_customer_segments_safe(df_rfm, segments)  # customer -> segment, for the CRM API
         log("L2", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
             rows_in=_rows_in, rows_out=len(segments))
 
@@ -547,6 +550,9 @@ if __name__ == "__main__":
             broadcast_count=int((layer4_df["should_send"] == 1).sum()) if layer4_df is not None else 0,
             suppressed_count=int((layer4_df["should_send"] == 0).sum()) if layer4_df is not None else 0)
 
+        # customer -> segment, for the CRM API; only after Layer 4 succeeded, so an aborted serving run
+        # (no/incompatible champion) never leaves the API with a half-updated set of files
+        export_customer_segments_safe(df_rfm, segments)
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
         export_segments_safe(validated_payload)  # for the CRM API; never aborts the pipeline
 
@@ -558,6 +564,10 @@ if __name__ == "__main__":
 
         log("L0", "pipeline_end", status="SUCCESS",
             total_duration_ms=round((time.monotonic() - _pipeline_start) * 1000))
+    except RegistryError as exc:
+        log("L0", "pipeline_error", level="ERROR", exc="RegistryError: " + str(exc))
+        print(f"❌ ใช้งาน Champion ไม่ได้: {exc}")
+        sys.exit(1)
     except FileNotFoundError as exc:
         log("L0", "pipeline_error", level="ERROR", exc=str(exc), csv_file=csv_file)
         print(f"⚠️ ไม่พบไฟล์ {csv_file} กรุณานำไฟล์ CSV วางไว้ในโฟลเดอร์ data/ หรือปรับ path ให้ถูกต้องครับ")

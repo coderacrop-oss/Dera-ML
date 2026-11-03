@@ -9,9 +9,13 @@ pip install -r requirements-api.txt            # plus numpy/pandas (already need
 export CRM_API_KEY=change-me                    # required; the server refuses to start without it
 export CRM_API_CALENDAR_TOKEN=another-secret    # optional; read-only token for calendar.ics only
 export CRM_API_DATA_DIR=data/processed          # optional (default shown)
+export CRM_API_MODELS_DIR=models                # optional; where model candidates/registry live (default shown)
+export CRM_API_PUBLIC_URL=http://localhost:8000 # optional; base of the approval link printed by train_champion.py
 uvicorn crm_api.app:app_factory --factory --app-dir src --port 8000
 ```
 Interactive docs: `http://localhost:8000/docs`.
+
+The API also hosts the champion approval page (`/v1/models/candidates/…`, token-protected, hidden from `/docs`); see `docs/training.md`.
 
 ## Produce a month (pipeline → scheduler → API)
 ```bash
