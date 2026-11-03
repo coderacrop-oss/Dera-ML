@@ -1,121 +1,121 @@
 customer_id,recommended_action,expected_profit,should_send
-c000,Loyalty Nurture: แต้มสะสม,2.88,1
-c001,VIP Reward: แจกแต้ม X2,2.92,1
-c002,Do Nothing (Do Not Disturb),4.34,0
-c003,Loyalty Nurture: แต้มสะสม,2.93,1
-c004,Do Nothing (No Profitable Action),3.62,0
-c005,Do Nothing (Low Basket Size),2.8,0
-c006,Do Nothing (Low Basket Size),2.18,0
-c007,Do Nothing (Do Not Disturb),4.96,0
-c008,Do Nothing (No Profitable Action),3.75,0
-c009,Do Nothing (Do Not Disturb),4.36,0
-c010,Do Nothing (Low Basket Size),2.5,0
-c011,Do Nothing (Do Not Disturb),4.51,0
-c012,Do Nothing (Do Not Disturb),2.99,0
-c013,Do Nothing (Do Not Disturb),5.12,0
-c014,Loyalty Nurture: แต้มสะสม,2.84,1
-c015,Do Nothing (Do Not Disturb),4.39,0
-c016,Do Nothing (Low Basket Size),2.04,0
-c017,Do Nothing (No Profitable Action),3.86,0
-c018,Do Nothing (Do Not Disturb),5.47,0
-c019,Do Nothing (Do Not Disturb),4.32,0
-c020,Loyalty Nurture: แต้มสะสม,2.7,1
-c021,Do Nothing (Do Not Disturb),5.28,0
-c022,Do Nothing (No Profitable Action),3.63,0
-c023,Loyalty Nurture: แต้มสะสม,2.8,1
-c024,Do Nothing (Do Not Disturb),7.18,0
-c025,Do Nothing (No Profitable Action),4.08,0
-c026,Do Nothing (Do Not Disturb),3.83,0
-c027,Loyalty Nurture: แต้มสะสม,2.7,1
-c028,Do Nothing (No Profitable Action),3.89,0
-c029,Do Nothing (No Profitable Action),3.71,0
-c030,Do Nothing (No Profitable Action),6.23,0
-c031,Do Nothing (Do Not Disturb),5.13,0
-c032,Do Nothing (Do Not Disturb),4.71,0
-c033,Do Nothing (Do Not Disturb),4.37,0
-c034,Loyalty Nurture: แต้มสะสม,2.72,1
-c035,VIP Reward: แจกแต้ม X2,5.77,1
-c036,Do Nothing (Do Not Disturb),4.31,0
-c037,Do Nothing (No Profitable Action),4.05,0
-c038,VIP Reward: แจกแต้ม X2,5.59,1
-c039,Loyalty Nurture: แต้มสะสม,5.57,1
-c040,Do Nothing (Low Basket Size),2.84,0
-c041,Do Nothing (Do Not Disturb),4.37,0
-c042,Do Nothing (No Profitable Action),3.55,0
-c043,Do Nothing (Do Not Disturb),5.39,0
-c044,Do Nothing (Low Basket Size),2.2,0
-c045,Loyalty Nurture: แต้มสะสม,2.76,1
-c046,Do Nothing (No Profitable Action),3.89,0
-c047,Do Nothing (Do Not Disturb),4.98,0
-c048,Do Nothing (Do Not Disturb),5.26,0
-c049,Do Nothing (Do Not Disturb),5.31,0
-c050,Do Nothing (No Profitable Action),4.01,0
-c051,Do Nothing (Do Not Disturb),5.47,0
-c052,Do Nothing (Do Not Disturb),4.0,0
-c053,Do Nothing (Do Not Disturb),5.42,0
-c054,Do Nothing (No Profitable Action),3.86,0
-c055,Do Nothing (Low Basket Size),2.55,0
-c056,Do Nothing (Low Basket Size),1.76,0
-c057,Do Nothing (Low Basket Size),2.43,0
-c058,Do Nothing (Low Basket Size),2.67,0
-c059,Loyalty Nurture: แต้มสะสม,2.68,1
-c060,Do Nothing (Do Not Disturb),4.31,0
-c061,Do Nothing (Do Not Disturb),4.89,0
-c062,Loyalty Nurture: แต้มสะสม,2.75,1
-c063,Do Nothing (Do Not Disturb),5.28,0
-c064,Do Nothing (Do Not Disturb),5.35,0
-c065,Do Nothing (Do Not Disturb),4.7,0
-c066,VIP Reward: แจกแต้ม X2,2.86,1
-c067,Do Nothing (Do Not Disturb),5.73,0
-c068,Loyalty Nurture: แต้มสะสม,2.93,1
-c069,Do Nothing (No Profitable Action),4.08,0
-c070,Do Nothing (Do Not Disturb),5.75,0
-c071,Do Nothing (No Profitable Action),4.04,0
-c072,Do Nothing (Do Not Disturb),5.69,0
-c073,Do Nothing (Low Basket Size),2.04,0
-c074,Loyalty Nurture: แต้มสะสม,5.73,1
-c075,Do Nothing (No Profitable Action),5.28,0
-c076,Do Nothing (Do Not Disturb),4.47,0
-c077,Do Nothing (Do Not Disturb),3.72,0
-c078,Do Nothing (No Profitable Action),3.58,0
-c079,Do Nothing (No Profitable Action),4.08,0
-c080,Do Nothing (No Profitable Action),3.71,0
-c081,Loyalty Nurture: แต้มสะสม,2.8,1
-c082,Do Nothing (No Profitable Action),3.75,0
-c083,Do Nothing (Do Not Disturb),5.34,0
-c084,Do Nothing (No Profitable Action),3.55,0
-c085,Do Nothing (Do Not Disturb),4.59,0
-c086,Do Nothing (Do Not Disturb),4.96,0
-c087,Do Nothing (Do Not Disturb),5.27,0
-c088,Do Nothing (Do Not Disturb),4.36,0
-c089,Do Nothing (Do Not Disturb),4.58,0
-c090,Do Nothing (No Profitable Action),3.77,0
-c091,Do Nothing (Do Not Disturb),4.92,0
-c092,Do Nothing (Do Not Disturb),4.74,0
-c093,Do Nothing (Low Basket Size),2.74,0
-c094,Do Nothing (Do Not Disturb),4.16,0
-c095,Do Nothing (No Profitable Action),5.25,0
-c096,Do Nothing (Do Not Disturb),4.64,0
-c097,Do Nothing (No Profitable Action),3.8,0
-c098,Do Nothing (No Profitable Action),4.08,0
-c099,Do Nothing (Do Not Disturb),4.32,0
-c100,Do Nothing (Do Not Disturb),4.66,0
-c101,VIP Reward: แจกแต้ม X2,5.57,1
-c102,Do Nothing (No Profitable Action),6.48,0
-c103,Do Nothing (Do Not Disturb),4.54,0
-c104,Loyalty Nurture: แต้มสะสม,2.81,1
-c105,Do Nothing (No Profitable Action),3.86,0
-c106,Do Nothing (No Profitable Action),3.8,0
-c107,Do Nothing (No Profitable Action),3.62,0
-c108,Do Nothing (Do Not Disturb),4.78,0
-c109,Do Nothing (Do Not Disturb),5.47,0
-c110,Do Nothing (Do Not Disturb),7.34,0
-c111,Do Nothing (Do Not Disturb),4.54,0
-c112,Do Nothing (Do Not Disturb),4.96,0
-c113,Do Nothing (No Profitable Action),4.08,0
-c114,Loyalty Nurture: แต้มสะสม,2.72,1
-c115,Do Nothing (Do Not Disturb),4.94,0
-c116,Do Nothing (Do Not Disturb),4.71,0
-c117,Do Nothing (Do Not Disturb),5.38,0
-c118,Do Nothing (Do Not Disturb),5.23,0
-c119,Do Nothing (Do Not Disturb),4.42,0
+c000,Do Nothing (Do Not Disturb),3.6,0
+c001,Do Nothing (Do Not Disturb),3.65,0
+c002,Do Nothing (Do Not Disturb),4.42,0
+c003,Do Nothing (No Profitable Action),3.66,0
+c004,Do Nothing (Do Not Disturb),3.9,0
+c005,Do Nothing (Low Basket Size),2.13,0
+c006,Do Nothing (Low Basket Size),2.04,0
+c007,Do Nothing (Do Not Disturb),4.88,0
+c008,Do Nothing (Do Not Disturb),4.02,0
+c009,Do Nothing (No Profitable Action),4.44,0
+c010,Do Nothing (Low Basket Size),2.34,0
+c011,Do Nothing (Do Not Disturb),4.6,0
+c012,Do Nothing (Do Not Disturb),3.51,0
+c013,Do Nothing (Do Not Disturb),5.62,0
+c014,Do Nothing (Do Not Disturb),3.34,0
+c015,Do Nothing (Do Not Disturb),4.33,0
+c016,Do Nothing (Low Basket Size),3.24,0
+c017,Do Nothing (Do Not Disturb),4.13,0
+c018,Do Nothing (Do Not Disturb),5.85,0
+c019,Do Nothing (Do Not Disturb),4.4,0
+c020,Do Nothing (Do Not Disturb),3.12,0
+c021,Do Nothing (Do Not Disturb),5.56,0
+c022,Do Nothing (Do Not Disturb),3.88,0
+c023,Do Nothing (Do Not Disturb),3.6,0
+c024,Loyalty Nurture: แต้มสะสม,8.41,1
+c025,Do Nothing (Do Not Disturb),4.13,0
+c026,Do Nothing (Do Not Disturb),3.6,0
+c027,Do Nothing (Do Not Disturb),3.12,0
+c028,Do Nothing (Do Not Disturb),4.16,0
+c029,Do Nothing (Do Not Disturb),3.75,0
+c030,Do Nothing (Do Not Disturb),7.21,0
+c031,Do Nothing (Do Not Disturb),5.63,0
+c032,Do Nothing (Do Not Disturb),5.61,0
+c033,Do Nothing (Do Not Disturb),4.45,0
+c034,Do Nothing (Do Not Disturb),3.4,0
+c035,Do Nothing (Do Not Disturb),6.13,0
+c036,Do Nothing (Do Not Disturb),4.39,0
+c037,Do Nothing (Do Not Disturb),4.33,0
+c038,Do Nothing (Do Not Disturb),5.94,0
+c039,Do Nothing (Do Not Disturb),5.92,0
+c040,Do Nothing (Low Basket Size),3.01,0
+c041,Do Nothing (Do Not Disturb),4.45,0
+c042,Do Nothing (No Profitable Action),3.8,0
+c043,Do Nothing (Do Not Disturb),6.48,0
+c044,Do Nothing (Low Basket Size),1.67,0
+c045,Do Nothing (Do Not Disturb),3.45,0
+c046,Do Nothing (Do Not Disturb),4.52,0
+c047,Do Nothing (Do Not Disturb),5.47,0
+c048,Do Nothing (Do Not Disturb),5.63,0
+c049,Do Nothing (Do Not Disturb),5.8,0
+c050,Do Nothing (Do Not Disturb),4.29,0
+c051,Loyalty Nurture: แต้มสะสม,5.7,1
+c052,Do Nothing (Do Not Disturb),4.28,0
+c053,Do Nothing (Do Not Disturb),6.52,0
+c054,Do Nothing (Do Not Disturb),4.13,0
+c055,Do Nothing (Low Basket Size),2.58,0
+c056,Do Nothing (Low Basket Size),1.91,0
+c057,Do Nothing (Low Basket Size),2.46,0
+c058,Do Nothing (Low Basket Size),2.03,0
+c059,Do Nothing (Do Not Disturb),3.35,0
+c060,Do Nothing (Do Not Disturb),4.39,0
+c061,Do Nothing (Do Not Disturb),5.36,0
+c062,Do Nothing (Do Not Disturb),3.79,0
+c063,Do Nothing (Do Not Disturb),5.56,0
+c064,Do Nothing (Do Not Disturb),5.72,0
+c065,Do Nothing (No Profitable Action),4.79,0
+c066,Do Nothing (Do Not Disturb),3.58,0
+c067,Do Nothing (Do Not Disturb),7.55,0
+c068,Do Nothing (No Profitable Action),3.66,0
+c069,Do Nothing (Do Not Disturb),4.28,0
+c070,Do Nothing (Do Not Disturb),6.01,0
+c071,Do Nothing (Do Not Disturb),4.32,0
+c072,Do Nothing (Do Not Disturb),5.74,0
+c073,Do Nothing (Low Basket Size),3.24,0
+c074,Do Nothing (Do Not Disturb),6.08,0
+c075,Do Nothing (Do Not Disturb),6.89,0
+c076,Do Nothing (Do Not Disturb),4.55,0
+c077,Do Nothing (Do Not Disturb),4.06,0
+c078,Do Nothing (No Profitable Action),3.83,0
+c079,Do Nothing (Do Not Disturb),4.36,0
+c080,Do Nothing (Do Not Disturb),3.97,0
+c081,Do Nothing (Do Not Disturb),3.87,0
+c082,Do Nothing (Do Not Disturb),4.34,0
+c083,Do Nothing (Do Not Disturb),5.82,0
+c084,Do Nothing (Do Not Disturb),3.8,0
+c085,Do Nothing (Do Not Disturb),5.46,0
+c086,Do Nothing (Do Not Disturb),5.06,0
+c087,Do Nothing (Do Not Disturb),5.75,0
+c088,Do Nothing (No Profitable Action),4.44,0
+c089,Do Nothing (Do Not Disturb),4.55,0
+c090,Do Nothing (Do Not Disturb),4.37,0
+c091,Do Nothing (Do Not Disturb),5.4,0
+c092,Do Nothing (Do Not Disturb),4.83,0
+c093,Do Nothing (Low Basket Size),2.89,0
+c094,Do Nothing (Do Not Disturb),4.31,0
+c095,Do Nothing (Do Not Disturb),6.85,0
+c096,Do Nothing (Do Not Disturb),4.73,0
+c097,Do Nothing (Do Not Disturb),3.99,0
+c098,Do Nothing (Do Not Disturb),4.36,0
+c099,Do Nothing (No Profitable Action),4.4,0
+c100,Do Nothing (No Profitable Action),4.75,0
+c101,Do Nothing (Do Not Disturb),5.91,0
+c102,Do Nothing (Do Not Disturb),6.66,0
+c103,Do Nothing (Do Not Disturb),4.47,0
+c104,Do Nothing (Do Not Disturb),3.19,0
+c105,Do Nothing (Do Not Disturb),4.47,0
+c106,Do Nothing (Do Not Disturb),3.99,0
+c107,Do Nothing (No Profitable Action),3.87,0
+c108,Do Nothing (Do Not Disturb),4.71,0
+c109,Do Nothing (Do Not Disturb),5.97,0
+c110,Do Nothing (Do Not Disturb),7.77,0
+c111,Do Nothing (Do Not Disturb),4.47,0
+c112,Do Nothing (Do Not Disturb),5.45,0
+c113,Do Nothing (Do Not Disturb),4.36,0
+c114,Do Nothing (Do Not Disturb),3.5,0
+c115,Do Nothing (Do Not Disturb),5.42,0
+c116,Do Nothing (Do Not Disturb),4.8,0
+c117,Do Nothing (Do Not Disturb),5.25,0
+c118,Do Nothing (Do Not Disturb),5.51,0
+c119,Do Nothing (Do Not Disturb),4.5,0

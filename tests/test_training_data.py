@@ -56,12 +56,14 @@ def test_no_holdout_customer_in_training_frames(tmp_path):
     assert held and not (used & held)
 
 
-def test_mixed_label_modes_across_stores_raise_naming_stores(tmp_path):
+def test_mixed_label_modes_across_stores_allowed_pool_mode_is_real(tmp_path):
+    # Mixed real+proxy is now allowed: real-labels stores provide causal signal,
+    # proxy stores provide scale. Pool label_mode = "real" if any store has real labels.
     lab = make_pos_csv(tmp_path, seed=1, with_labels=True, name="lab.csv")
     plain = make_pos_csv(tmp_path, seed=2, name="plain.csv")
-    with pytest.raises(TrainingDataError) as e:
-        build_pooled([StoreInput("shop-a", lab, lab), StoreInput("shop-b", plain, None)])
-    assert "shop-a" in str(e.value) and "shop-b" in str(e.value)
+    pooled = build_pooled([StoreInput("shop-a", lab, lab), StoreInput("shop-b", plain, None)])
+    assert pooled.label_mode == "real"
+    assert set(pooled.contexts) == {"shop-a", "shop-b"}
 
 
 def test_store_without_treated_rows_in_training_raises_naming_store(tmp_path):

@@ -9,7 +9,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from layer4_uplift_margin import Layer4Context, build_layer4_context
+from uplift_engine import Layer4Context, build_serving_context as build_layer4_context
 
 STORE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -69,8 +69,14 @@ def build_pooled(inputs: list, holdout_frac: float = 0.2, seed: int = 42) -> Poo
             raise TrainingDataError(f"store {i.store_id}: file not found: {i.csv_path}")
         contexts[i.store_id] = build_layer4_context(i.csv_path, i.labels_path)
     modes = {s: c.label_mode for s, c in contexts.items()}
-    if len(set(modes.values())) > 1:
-        raise TrainingDataError(f"shops mix real and proxy labels ({modes}); give a labels file for all shops or none")
+    mode_set = set(modes.values())
+    # Mixed real+proxy is allowed: real-labels stores provide causal signal,
+    # proxy stores provide scale. label_mode of the pool = "real" if any store has real labels.
+    pool_label_mode = "real" if "real" in mode_set else "proxy"
+    if len(mode_set) > 1:
+        real_stores  = [s for s, m in modes.items() if m == "real"]
+        proxy_stores = [s for s, m in modes.items() if m == "proxy"]
+        print(f"ℹ️  [Training] Pooling real-labels stores {real_stores} with proxy stores {proxy_stores}")
     feats = {s: tuple(c.features) for s, c in contexts.items()}
     if len(set(feats.values())) > 1:
         raise TrainingDataError(f"shops produce different feature lists: {feats}")
@@ -80,7 +86,7 @@ def build_pooled(inputs: list, holdout_frac: float = 0.2, seed: int = 42) -> Poo
     if not any(holdout_ids.values()):
         raise TrainingDataError("holdout is empty; give more customers or a larger --holdout-frac")
     first = next(iter(contexts.values()))
-    return PooledData(contexts, train_ids, holdout_ids, list(first.features), first.label_mode)
+    return PooledData(contexts, train_ids, holdout_ids, list(first.features), pool_label_mode)
 
 
 def training_frames(pooled: PooledData):

@@ -20,7 +20,7 @@ import pandas as pd
 from business_config import REGISTRY_PATH
 from candidates import create_candidate, evaluate_candidate
 from data_quality import DataQualityError, print_dq_report, validate_training_data
-from layer4_uplift_margin import _train_xlearner
+from uplift_engine import _train_xlearner
 from model_registry import ModelRegistry, RegistryError
 from pipeline_logger import log
 from training_data import StoreInput, TrainingDataError, build_pooled, parse_store_data, training_frames
@@ -62,6 +62,7 @@ def _train(args) -> int:
                          os.path.abspath(i.labels_path) if i.labels_path else None)
               for i in (parse_store_data(a) for a in args.store_data)]
     args.models_root = os.path.abspath(args.models_root)
+    args.baseline_data = [os.path.abspath(p) for p in (args.baseline_data or [])]
     registry = ModelRegistry(args.models_root)
     champion, ref = _load_champion(registry)
     with _scratch_cwd():
@@ -78,13 +79,44 @@ def _train(args) -> int:
         # ── P0: Compute customer-level feature baseline for drift detection ────
         try:
             from drift_detector import compute_baseline
+            from uplift_engine import build_serving_context as _build_ctx
+            # Baseline represents the EXPECTED SERVING DISTRIBUTION (all populations
+            # the model will be asked to score), not just the training distribution.
+            # Training-store customers are excluded so a large wholesale training set
+            # does not bias the bins and cause false-positive DRIFT alerts when serving
+            # smaller B2C or retail populations.  Pass all expected serving CSVs via
+            # --baseline-data to get equal-weight representation across populations.
+            _EXTRA_CAP = 300
+            _rng_base  = 42
             train_custs = []
-            for s, ctx in pooled.contexts.items():
-                mask = ctx.cust_agg["customer_id"].astype(str).isin(pooled.train_ids[s])
-                train_custs.append(ctx.cust_agg[mask][[f for f in pooled.features if f in ctx.cust_agg.columns]])
+            # (training store customers intentionally NOT added here)
+            # Extend baseline with extra serving CSVs so it covers all expected populations
+            # (e.g., B2C reactivation, new customers) not just the training store distribution
+            for _bpath in (args.baseline_data or []):
+                try:
+                    _bctx = _build_ctx(os.path.abspath(_bpath), None)
+                    _df = _bctx.cust_agg[[f for f in pooled.features if f in _bctx.cust_agg.columns]]
+                    if len(_df) > _EXTRA_CAP:
+                        _df = _df.sample(n=_EXTRA_CAP, random_state=_rng_base)
+                    train_custs.append(_df)
+                    print(f"📐 [Drift] Added baseline data: {os.path.basename(_bpath)} "
+                          f"({min(len(_bctx.cust_agg), _EXTRA_CAP)} customers)")
+                except Exception as _be:
+                    print(f"⚠️  [Drift] Skipping baseline CSV {_bpath}: {_be}")
+            if not train_custs:
+                raise ValueError("No baseline data: pass at least one --baseline-data CSV.")
             all_train_cust = pd.concat(train_custs, ignore_index=True)
-            challenger.feature_baseline_stats = compute_baseline(all_train_cust, pooled.features)
-            print(f"📐 [Drift] Feature baseline computed ({len(pooled.features)} features, customer-level)")
+            # `frequency` is a raw transaction count that varies by orders of magnitude
+            # across customer populations (wholesale: 100+, retail: 1-10).  It always
+            # shows high PSI when serving different customer types, masking genuine drift
+            # in more stable features.  Exclude it from PSI monitoring; the model still
+            # uses it as a prediction feature.  Monitor bounded features instead.
+            _PSI_EXCLUDE = {"frequency"}
+            _psi_features = [f for f in pooled.features if f not in _PSI_EXCLUDE]
+            challenger.feature_baseline_stats = compute_baseline(all_train_cust, _psi_features)
+            print(f"📐 [Drift] Feature baseline computed ({len(_psi_features)} features, "
+                  f"{len(all_train_cust)} customers total, capped {_EXTRA_CAP}/source, "
+                  f"excluded: {sorted(_PSI_EXCLUDE)})")
         except Exception as _e:
             print(f"⚠️  [Drift] Could not compute baseline: {_e}")
 
@@ -132,6 +164,8 @@ def _train(args) -> int:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--store-data", action="append", default=[], metavar="STORE_ID:CSV[:LABELS]")
+    p.add_argument("--baseline-data", action="append", default=[], metavar="CSV",
+                   help="Extra CSVs (no labels) included only in feature baseline stats for drift detection")
     p.add_argument("--holdout-frac", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--models-root", default=os.path.dirname(REGISTRY_PATH))

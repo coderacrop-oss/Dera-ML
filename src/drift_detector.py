@@ -28,6 +28,19 @@ PSI_MODERATE = 0.10
 PSI_CRITICAL = 0.25
 N_BINS       = 10
 
+# Features that follow power-law / heavy-tailed distributions.
+# For PSI comparison we work in log1p-space so that the distance between
+# freq=1 and freq=5 is comparable to the distance between freq=50 and freq=200,
+# preventing a handful of high-volume wholesale customers from pushing bin edges
+# so high that all retail/new-customer serving data crowds into the first bin.
+# The model itself still receives RAW values (no transform applied at feature level).
+_LOG1P_FEATURES: frozenset[str] = frozenset({"frequency", "total_price", "quantity"})
+
+
+def _maybe_log1p(col: np.ndarray, feat: str) -> np.ndarray:
+    """Return log1p(col) for skewed count/spend features, unchanged otherwise."""
+    return np.log1p(col) if feat in _LOG1P_FEATURES else col
+
 
 # ── Baseline computation ───────────────────────────────────────────────────────
 
@@ -37,6 +50,8 @@ def compute_baseline(df: pd.DataFrame, features: list[str]) -> dict[str, Any]:
 
     Stores quantile-based bin edges + expected probabilities per bin.
     Laplace-smoothed so no bin ever has probability 0.
+    Skewed features (frequency, total_price, quantity) are compared in log1p-space
+    to avoid scale domination by high-volume customers.
 
     Attach to model before pickling:
         model.feature_baseline_stats = compute_baseline(train_df, features)
@@ -45,7 +60,9 @@ def compute_baseline(df: pd.DataFrame, features: list[str]) -> dict[str, Any]:
     for feat in features:
         if feat not in df.columns:
             continue
-        col = df[feat].dropna().astype(float)
+        col = df[feat].dropna().astype(float).values
+        col = _maybe_log1p(col, feat)
+        col = col[np.isfinite(col)]
         if len(col) < 5:
             continue
 
@@ -67,10 +84,11 @@ def compute_baseline(df: pd.DataFrame, features: list[str]) -> dict[str, Any]:
             "expected_p": expected_p.tolist(),
             "mean":       float(col.mean()),
             "std":        float(col.std()),
-            "p10":        float(col.quantile(0.10)),
-            "p50":        float(col.quantile(0.50)),
-            "p90":        float(col.quantile(0.90)),
+            "p10":        float(np.percentile(col, 10)),
+            "p50":        float(np.percentile(col, 50)),
+            "p90":        float(np.percentile(col, 90)),
             "n_train":    int(len(col)),
+            "log1p_transformed": feat in _LOG1P_FEATURES,
         }
     return stats
 
@@ -80,16 +98,20 @@ def compute_baseline(df: pd.DataFrame, features: list[str]) -> dict[str, Any]:
 def _psi_for_feature(
     base: dict[str, Any],
     col: pd.Series,
+    feat: str = "",
 ) -> tuple[float, str]:
     """Compute PSI for one feature.  Returns (psi_value, status_label)."""
-    col      = col.dropna().astype(float)
+    values   = col.dropna().astype(float).values
+    # Apply the same transform that was used when building the baseline
+    if base.get("log1p_transformed"):
+        values = np.log1p(values.clip(min=0))
     edges    = np.array(base["edges"])
     exp_p    = np.array(base["expected_p"])
 
-    if len(col) == 0:
+    if len(values) == 0:
         return float("nan"), "empty"
 
-    counts, _ = np.histogram(col, bins=edges)
+    counts, _ = np.histogram(values, bins=edges)
     total      = counts.sum() + len(counts) * 1e-6
     act_p      = (counts + 1e-6) / total
 
@@ -146,7 +168,7 @@ def check_drift(
             continue
 
         base = baseline_stats[feat]
-        psi, status = _psi_for_feature(base, serving_df[feat])
+        psi, status = _psi_for_feature(base, serving_df[feat], feat)
 
         mean_serve = (
             float(serving_df[feat].dropna().mean())
