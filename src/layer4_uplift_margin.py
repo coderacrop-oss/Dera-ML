@@ -3,7 +3,9 @@ import numpy as np
 import lightgbm as lgb
 import os
 from sklearn.calibration import CalibratedClassifierCV
+import json
 import pickle
+from dataclasses import dataclass
 from datetime import datetime
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -11,6 +13,9 @@ from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG, REGISTRY_PATH
 from peak_hours import write_peak_hours
+from atomic_io import atomic_write_text
+from model_registry import ModelRegistry, RegistryError
+from pipeline_logger import log
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +67,12 @@ class TLearnerModel:
         return getattr(self.mu0, 'n_features_in_', getattr(self.mu0, 'n_features_', None))
 
 
+def _with_names(model, features):
+    """Remember the exact feature list/order the model was fitted on (serving verifies it)."""
+    model.feature_names_ = list(features)
+    return model
+
+
 def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
     """Train X-learner meta-learner (5 LightGBM models total)."""
     n_treat = len(treat_data)
@@ -80,7 +91,7 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
                                   colsample_bytree=0.8, verbose=-1)
         mu1.fit(treat_data[features], treat_data['converted'])
         mu0.fit(ctrl_data[features],  ctrl_data['converted'])
-        return TLearnerModel(mu1, mu0)
+        return _with_names(TLearnerModel(mu1, mu0), features)
 
     # Stage 1: Base learners (outcome models) — calibrated for reliable P(Y=1|X)
     # Raw LightGBM probabilities are uncalibrated: predict_proba(X) = 0.7 ≠ 70% purchase rate.
@@ -131,7 +142,7 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
     propensity.fit(all_data[features], all_data['was_treated'])
 
     print("✅ [X-learner] Training complete (mu0, mu1, tau0, tau1, propensity)")
-    return XLearnerModel(mu0, mu1, tau0, tau1, propensity)
+    return _with_names(XLearnerModel(mu0, mu1, tau0, tau1, propensity), features)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -434,15 +445,23 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
     return result
 
 
-def run_layer4(pos_file_path="data/transactions.csv",
-               promo_response_path="data/marketing_campaign.csv",
-               product_cogs_dict=None,
-               default_cogs=None):
-    print("=== กำลังประมวลผล Layer 4: Campaign Engine (Dynamic Context Validation Gate) ===")
+@dataclass
+class Layer4Context:
+    """Everything Layer 4 derives from one shop's CSV before any model is fitted or applied."""
+    raw_df: pd.DataFrame
+    cust_agg: pd.DataFrame
+    features: list
+    rfm_df: pd.DataFrame
+    context_df: pd.DataFrame
+    top_bundle_name: str
+    product_cogs: dict
+    default_cogs: float
+    label_mode: str  # "real" (promotion-response labels) | "proxy" (temporal-split + random treatment)
 
+
+def build_layer4_context(pos_file_path, promo_response_path=None, product_cogs_dict=None, default_cogs=None):
     if not os.path.exists(pos_file_path):
-        print(f"❌ ไม่พบไฟล์ข้อมูล: {pos_file_path}")
-        return
+        raise FileNotFoundError(pos_file_path)
 
     norm_path = _normalize_to_pos_format(pos_file_path)
     raw_df = pd.read_csv(norm_path)
@@ -596,42 +615,6 @@ def run_layer4(pos_file_path="data/transactions.csv",
         cust_agg.columns = base_cols
     cust_agg['avg_spent'] = cust_agg['total_price']
 
-    treat_data = raw_df[raw_df['was_treated'] == 1]
-    ctrl_data  = raw_df[raw_df['was_treated'] == 0]
-    
-    model_dir = REGISTRY_PATH
-    os.makedirs(model_dir, exist_ok=True)
-
-    champion_path  = os.path.join(model_dir, "champion_xlearner.pkl")
-    # Legacy T-learner paths kept for backward compatibility
-    _legacy_treat  = os.path.join(model_dir, "champion_treat.pkl")
-    _legacy_ctrl   = os.path.join(model_dir, "champion_ctrl.pkl")
-
-    print("🚀 กำลังเทรนโมเดลใหม่ด้วย X-learner (Challenger Model)...")
-    challenger_model = _train_xlearner(treat_data, ctrl_data, features)
-
-    has_champion  = False
-    champion_model = None
-    if os.path.exists(champion_path):
-        with open(champion_path, 'rb') as f:
-            champion_model = pickle.load(f)
-        if champion_model.n_features_ == len(features):
-            has_champion = True
-        else:
-            print(f"⚠️  [Layer 4] Champion model has {champion_model.n_features_} features "
-                  f"but current data has {len(features)} — skipping champion comparison")
-            champion_model = None
-    elif os.path.exists(_legacy_treat) and os.path.exists(_legacy_ctrl):
-        with open(_legacy_treat, 'rb') as f: _lt = pickle.load(f)
-        with open(_legacy_ctrl,  'rb') as f: _lc = pickle.load(f)
-        if _lt.n_features_ == len(features):
-            champion_model = TLearnerModel(_lt, _lc)
-            has_champion   = True
-            print("ℹ️  [Layer 4] Loaded legacy T-learner champion (จะถูกแทนด้วย X-learner ถ้า gate ผ่าน)")
-        else:
-            print(f"⚠️  [Layer 4] Legacy champion has {_lt.n_features_} features "
-                  f"but current data has {len(features)} — skipping")
-
     # ── Per-customer top product (highest cumulative spend) ──────────────────
     # Used to look up product-specific COGS for guardrail calculation
     top_product_map = (
@@ -650,294 +633,292 @@ def run_layer4(pos_file_path="data/transactions.csv",
     print(f"💡 [Layer 4] Per-product COGS: {n_matched:,}/{len(cust_agg):,} customers matched "
           f"(fallback={_default_cogs:.1%})")
 
-    def evaluate_model_profit(model):
-        temp_df = cust_agg.copy()
-        temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
-        temp_df['prob_control'] = model.predict_control_proba(cust_agg[features]).round(4)
-        # rfm_decile_segment และ frequency มีใน cust_agg แล้ว — merge เฉพาะ columns ที่ยังขาด
-        rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
-        temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
-        # Assign each customer their MAJORITY time_context (mode across all transactions)
-        # so a customer who buys 70% of the time during off-peak hours gets "Off-Peak"
-        customer_context = (
-            context_df.groupby('customer_id')['time_context']
-            .agg(lambda x: x.mode().iloc[0] if len(x) > 0 else 'Peak')
-            .reset_index()
-        )
-        customer_stock = (
-            context_df.groupby('customer_id')['in_stock']
-            .agg(lambda x: bool(x.any()))   # in_stock if ANY of their products is in stock
-            .reset_index()
-        )
-        customer_ctx = customer_context.merge(customer_stock, on='customer_id', how='left')
-        temp_df = temp_df.merge(customer_ctx, on='customer_id', how='left')
+    return Layer4Context(raw_df=raw_df, cust_agg=cust_agg, features=features, rfm_df=rfm_df,
+                         context_df=context_df, top_bundle_name=top_bundle_name,
+                         product_cogs=_product_cogs, default_cogs=_default_cogs,
+                         label_mode="real" if use_real_labels else "proxy")
 
-        PROMO_COST_RATES = CONFIG["promo_cost_rates"]
 
-        # Data-adaptive basket thresholds: if dataset avg_spent is far below config
-        # threshold (e.g. grocery vs wholesale), scale down to P10/P50 of actual data
-        config_low = CONFIG["low_basket_threshold"]
-        config_mid = CONFIG["mid_basket_threshold"]
-        actual_p10 = float(temp_df['avg_spent'].quantile(0.10))
-        actual_p50 = float(temp_df['avg_spent'].quantile(0.50))
-        if actual_p50 < config_low:
-            low_basket = actual_p10
-            mid_basket = actual_p50
-            print(f"💡 [Layer 4] Adaptive thresholds: low_basket={low_basket:.2f} (P10), mid_basket={mid_basket:.2f} (P50) [dataset mean below config floor]")
-        else:
-            low_basket = config_low
-            mid_basket = config_mid
-        neg_uplift   = CONFIG["negative_uplift_guard"]
-        high_uplift  = CONFIG["high_uplift_threshold"]
-        vip_rfm      = CONFIG["vip_rfm_threshold"]
-        vip_prob     = CONFIG["vip_prob_threshold"]
-        spike_rfm    = CONFIG["spike_rfm_threshold"]
-        mid_rfm      = CONFIG["mid_rfm_threshold"]
+def decide_for_customers(model, ctx, customer_ids=None):
+    """Score customers with `model` and apply the action rules + CFO guardrail.
 
-        MIN_MARGIN = CONFIG["min_allowable_net_margin"]
+    Returns (total expected profit, per-customer frame incl. `should_send`)."""
+    cust_agg, features = ctx.cust_agg, ctx.features
+    rfm_df, context_df = ctx.rfm_df, ctx.context_df
+    top_bundle_name = ctx.top_bundle_name
+    _product_cogs, _default_cogs = ctx.product_cogs, ctx.default_cogs
+    if customer_ids is not None:
+        cust_agg = cust_agg[cust_agg['customer_id'].isin(customer_ids)]
+    temp_df = cust_agg.copy()
+    if len(temp_df) == 0:
+        for _c in ('recommended_action', 'expected_profit', 'guardrail_blocked', 'send_window', 'should_send'):
+            temp_df[_c] = pd.Series(dtype=object)
+        return 0.0, temp_df
+    temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
+    temp_df['prob_control'] = model.predict_control_proba(cust_agg[features]).round(4)
+    # rfm_decile_segment และ frequency มีใน cust_agg แล้ว — merge เฉพาะ columns ที่ยังขาด
+    rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
+    temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
+    # Assign each customer their MAJORITY time_context (mode across all transactions)
+    # so a customer who buys 70% of the time during off-peak hours gets "Off-Peak"
+    customer_context = (
+        context_df.groupby('customer_id')['time_context']
+        .agg(lambda x: x.mode().iloc[0] if len(x) > 0 else 'Peak')
+        .reset_index()
+    )
+    customer_stock = (
+        context_df.groupby('customer_id')['in_stock']
+        .agg(lambda x: bool(x.any()))   # in_stock if ANY of their products is in stock
+        .reset_index()
+    )
+    customer_ctx = customer_context.merge(customer_stock, on='customer_id', how='left')
+    temp_df = temp_df.merge(customer_ctx, on='customer_id', how='left')
 
-        def calculate_action_and_profit(row):
-            uplift       = float(row['uplift_score'])
-            prob_c       = float(row['prob_control'])
-            rfm_seg      = row['rfm_decile_segment']
-            in_stock     = row['in_stock']
-            avg_spent    = float(row['avg_spent'])
-            is_spike     = float(row['is_campaign_spike'])
-            time_context = row.get('time_context', 'Peak')   # "Peak" or "Off-Peak"
-            is_off_peak  = (time_context == 'Off-Peak')
+    PROMO_COST_RATES = CONFIG["promo_cost_rates"]
 
-            # Per-product COGS: look up customer's top product, fall back to dataset default
-            top_prod  = row.get('top_product', '')
-            cogs      = _product_cogs.get(top_prod, _default_cogs)
-            gross_margin = avg_spent * (1 - cogs)
-            p_baseline   = max(0.0, prob_c)
-            p_treated    = max(0.0, min(1.0, prob_c + uplift))
-            baseline_profit = round(gross_margin * p_baseline, 2)
+    # Data-adaptive basket thresholds: if dataset avg_spent is far below config
+    # threshold (e.g. grocery vs wholesale), scale down to P10/P50 of actual data
+    config_low = CONFIG["low_basket_threshold"]
+    config_mid = CONFIG["mid_basket_threshold"]
+    actual_p10 = float(temp_df['avg_spent'].quantile(0.10))
+    actual_p50 = float(temp_df['avg_spent'].quantile(0.50))
+    if actual_p50 < config_low:
+        low_basket = actual_p10
+        mid_basket = actual_p50
+        print(f"💡 [Layer 4] Adaptive thresholds: low_basket={low_basket:.2f} (P10), mid_basket={mid_basket:.2f} (P50) [dataset mean below config floor]")
+    else:
+        low_basket = config_low
+        mid_basket = config_mid
+    neg_uplift   = CONFIG["negative_uplift_guard"]
+    high_uplift  = CONFIG["high_uplift_threshold"]
+    vip_rfm      = CONFIG["vip_rfm_threshold"]
+    vip_prob     = CONFIG["vip_prob_threshold"]
+    spike_rfm    = CONFIG["spike_rfm_threshold"]
+    mid_rfm      = CONFIG["mid_rfm_threshold"]
 
-            # --- Do Nothing cases ---
-            if pd.isna(in_stock) or not in_stock:
-                return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
-            if avg_spent < low_basket:
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
-            if uplift < neg_uplift:
-                return pd.Series(["Do Nothing (Negative Uplift Guard)", baseline_profit, 0, time_context])
+    MIN_MARGIN = CONFIG["min_allowable_net_margin"]
 
-            # Helper: per-customer CFO Guardrail check
-            # Incremental profit = gross_margin * (p_treated - p_baseline) - promo_cost
-            # Off-peak allows higher promo cost — justified by driving traffic to a quiet store.
-            # Peak uses lower cost — customers are already there, just retain/upsell lightly.
-            def _guardrail_ok(promo_cost_rate):
-                promo_cost = avg_spent * promo_cost_rate
-                gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
-                net_profit = gross_rev - avg_spent * cogs - promo_cost
-                net_margin = net_profit / gross_rev if gross_rev > 0 else 0
-                incremental = gross_margin * (p_treated - p_baseline) - promo_cost
-                return net_margin >= MIN_MARGIN and incremental > 0, promo_cost
+    def calculate_action_and_profit(row):
+        uplift       = float(row['uplift_score'])
+        prob_c       = float(row['prob_control'])
+        rfm_seg      = row['rfm_decile_segment']
+        in_stock     = row['in_stock']
+        avg_spent    = float(row['avg_spent'])
+        is_spike     = float(row['is_campaign_spike'])
+        time_context = row.get('time_context', 'Peak')   # "Peak" or "Off-Peak"
+        is_off_peak  = (time_context == 'Off-Peak')
 
-            # --- Peak-aware send window (for broadcast_list.csv) ---
-            # Notify customer 30-60 min BEFORE their typical shopping window opens
-            send_window = "Off-Peak Window" if is_off_peak else "Peak Window"
+        # Per-product COGS: look up customer's top product, fall back to dataset default
+        top_prod  = row.get('top_product', '')
+        cogs      = _product_cogs.get(top_prod, _default_cogs)
+        gross_margin = avg_spent * (1 - cogs)
+        p_baseline   = max(0.0, prob_c)
+        p_treated    = max(0.0, min(1.0, prob_c + uplift))
+        baseline_profit = round(gross_margin * p_baseline, 2)
 
-            # --- Active campaign cases with context-aware guardrail ---
+        # --- Do Nothing cases ---
+        if pd.isna(in_stock) or not in_stock:
+            return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
+        if avg_spent < low_basket:
+            return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+        if uplift < neg_uplift:
+            return pd.Series(["Do Nothing (Negative Uplift Guard)", baseline_profit, 0, time_context])
 
-            # Festival spike — context-independent, always use festival rate
-            if is_spike > 0.5 and rfm_seg >= spike_rfm:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["festival"])
+        # Helper: per-customer CFO Guardrail check
+        # Incremental profit = gross_margin * (p_treated - p_baseline) - promo_cost
+        # Off-peak allows higher promo cost — justified by driving traffic to a quiet store.
+        # Peak uses lower cost — customers are already there, just retain/upsell lightly.
+        def _guardrail_ok(promo_cost_rate):
+            promo_cost = avg_spent * promo_cost_rate
+            gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
+            net_profit = gross_rev - avg_spent * cogs - promo_cost
+            net_margin = net_profit / gross_rev if gross_rev > 0 else 0
+            incremental = gross_margin * (p_treated - p_baseline) - promo_cost
+            return net_margin >= MIN_MARGIN and incremental > 0, promo_cost
+
+        # --- Peak-aware send window (for broadcast_list.csv) ---
+        # Notify customer 30-60 min BEFORE their typical shopping window opens
+        send_window = "Off-Peak Window" if is_off_peak else "Peak Window"
+
+        # --- Active campaign cases with context-aware guardrail ---
+
+        # Festival spike — context-independent, always use festival rate
+        if is_spike > 0.5 and rfm_seg >= spike_rfm:
+            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["festival"])
+            if not ok:
+                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
+            return pd.Series(["Standard Retention (Festival Guard)",
+                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+
+        # Off-Peak customers: goal is to drive traffic when store is quiet
+        # Use aggressive traffic-driver discount (off_peak_traffic rate = 0.22)
+        # Action name reflects the business intent: pull them in during the quiet window
+        if is_off_peak and uplift > 0 and rfm_seg >= mid_rfm:
+            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_traffic"])
+            if not ok:
+                # Too expensive even with off-peak intent → try lighter VIP points
+                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_vip"])
                 if not ok:
                     return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                return pd.Series(["Standard Retention (Festival Guard)",
+                return pd.Series(["Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)",
                                   round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+            return pd.Series(["Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
+                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
-            # Off-Peak customers: goal is to drive traffic when store is quiet
-            # Use aggressive traffic-driver discount (off_peak_traffic rate = 0.22)
-            # Action name reflects the business intent: pull them in during the quiet window
-            if is_off_peak and uplift > 0 and rfm_seg >= mid_rfm:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_traffic"])
-                if not ok:
-                    # Too expensive even with off-peak intent → try lighter VIP points
-                    ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["off_peak_vip"])
-                    if not ok:
-                        return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                    return pd.Series(["Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)",
-                                      round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-                return pd.Series(["Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+        # Peak customers: already arriving → upsell/reward, lower cost
+        if rfm_seg >= vip_rfm and prob_c > vip_prob:
+            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
+                                           else PROMO_COST_RATES["vip_points"])
+            if not ok:
+                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
+            return pd.Series(["VIP Reward: แจกแต้ม X2",
+                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
-            # Peak customers: already arriving → upsell/reward, lower cost
-            if rfm_seg >= vip_rfm and prob_c > vip_prob:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
-                                               else PROMO_COST_RATES["vip_points"])
-                if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                return pd.Series(["VIP Reward: แจกแต้ม X2",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+        if rfm_seg >= vip_rfm and rfm_seg >= 9:
+            ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
+                                           else PROMO_COST_RATES["vip_points"])
+            if not ok:
+                return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
+            return pd.Series(["VIP Early Access",
+                              round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
 
-            if rfm_seg >= vip_rfm and rfm_seg >= 9:
-                ok, promo_cost = _guardrail_ok(PROMO_COST_RATES["peak_upsell"] if not is_off_peak
-                                               else PROMO_COST_RATES["vip_points"])
-                if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                return pd.Series(["VIP Early Access",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-            if uplift > high_uplift:
-                rate = PROMO_COST_RATES["peak_upsell"] if not is_off_peak else PROMO_COST_RATES["bundle"]
-                ok, promo_cost = _guardrail_ok(rate)
-                if not ok:
-                    return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-                return pd.Series([f"Push Promotion: {top_bundle_name}",
-                                  round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-
-            # Default: standard retention, peak uses cheaper rate
-            rate = PROMO_COST_RATES["standard"] if not is_off_peak else PROMO_COST_RATES["off_peak"]
+        if uplift > high_uplift:
+            rate = PROMO_COST_RATES["peak_upsell"] if not is_off_peak else PROMO_COST_RATES["bundle"]
             ok, promo_cost = _guardrail_ok(rate)
             if not ok:
                 return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
-            return pd.Series(["Standard Retention",
+            return pd.Series([f"Push Promotion: {top_bundle_name}",
                               round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
-            
-        res = temp_df.apply(calculate_action_and_profit, axis=1)
-        temp_df['recommended_action'] = res[0]
-        temp_df['expected_profit']    = res[1]
-        temp_df['guardrail_blocked']  = res[2]
-        temp_df['send_window']        = res[3]
-        temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
-        return temp_df['expected_profit'].sum(), temp_df
 
-    challenger_profit, challenger_detail_df = evaluate_model_profit(challenger_model)
-    
-    is_passed = True
-    growth_pct = 0.0
-    
-    # 2. Market Context Evaluation Logic (เช็กสภาวะตลาด)
-    # Baseline = avg spending of first 75% of timeline; Current = most recent 25%
-    raw_df['timestamp'] = pd.to_datetime(raw_df.get('timestamp', pd.NaT), errors='coerce')
-    ts_min = raw_df['timestamp'].min()
-    ts_max = raw_df['timestamp'].max()
+        # Default: standard retention, peak uses cheaper rate
+        rate = PROMO_COST_RATES["standard"] if not is_off_peak else PROMO_COST_RATES["off_peak"]
+        ok, promo_cost = _guardrail_ok(rate)
+        if not ok:
+            return pd.Series(["Do Nothing (CFO Guardrail)", baseline_profit, 1, time_context])
+        return pd.Series(["Standard Retention",
+                          round(gross_margin * p_treated - promo_cost, 2), 0, send_window])
+        
+    res = temp_df.apply(calculate_action_and_profit, axis=1)
+    temp_df['recommended_action'] = res[0]
+    temp_df['expected_profit']    = res[1]
+    temp_df['guardrail_blocked']  = res[2]
+    temp_df['send_window']        = res[3]
+    temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
+    temp_df['should_send'] = (
+        (temp_df['guardrail_blocked'] == 0) &
+        (~temp_df['recommended_action'].str.startswith('Do Nothing'))
+    ).astype(int)
+    return temp_df['expected_profit'].sum(), temp_df
+
+
+def market_is_recession(raw_df):
+    """(is_recession, current_avg_spent): last 25% of the timeline vs the first 75%."""
+    ts = pd.to_datetime(raw_df.get('timestamp', pd.NaT), errors='coerce')
+    ts_min, ts_max = ts.min(), ts.max()
     if pd.notna(ts_min) and pd.notna(ts_max) and ts_min != ts_max:
         cutoff = ts_min + (ts_max - ts_min) * 0.75
-        baseline_avg_spent = raw_df.loc[raw_df['timestamp'] <= cutoff, 'total_price'].mean()
-        current_avg_spent  = raw_df.loc[raw_df['timestamp'] >  cutoff, 'total_price'].mean()
-        # fallback if slice is empty
+        baseline_avg_spent = raw_df.loc[ts <= cutoff, 'total_price'].mean()
+        current_avg_spent = raw_df.loc[ts > cutoff, 'total_price'].mean()
         if pd.isna(baseline_avg_spent) or baseline_avg_spent <= 0:
             baseline_avg_spent = raw_df['total_price'].mean()
         if pd.isna(current_avg_spent) or current_avg_spent <= 0:
             current_avg_spent = raw_df['total_price'].mean()
     else:
         baseline_avg_spent = raw_df['total_price'].mean()
-        current_avg_spent  = baseline_avg_spent
-    is_recession_mode = current_avg_spent < (baseline_avg_spent * CONFIG["recession_threshold"])
-    
-    gate_reason = ""
-    
-    if has_champion:
-        champion_profit, _ = evaluate_model_profit(champion_model)
-        growth_pct = ((challenger_profit - champion_profit) / champion_profit) * 100
-        
-        if is_recession_mode:
-            # ในภาวะวิกฤต ถ้าโมเดลใหม่รัดกุมกว่า (Guard Actions > 50%) จะอนุมัติเพื่อป้องกันขาดทุน
-            do_nothing_ratio = (challenger_detail_df['recommended_action'].str.contains("Do Nothing").mean()) * 100
-            dn_thr    = CONFIG["do_nothing_recession_threshold"]
-            gate_tgt  = CONFIG["gate_growth_target_pct"]
-            if do_nothing_ratio > dn_thr:
-                is_passed = True
-                gate_reason = f"⚠️ [RECESSION MODE DETECTED]: ตลาดซบเซา (เฉลี่ย {current_avg_spent:,.2f} บาท) -> อนุมัติโมเดลใหม่ที่เน้น Defensive เพื่อเซฟงบ (Do Nothing = {do_nothing_ratio:.1f}%)"
-            else:
-                is_passed = (growth_pct >= gate_tgt)
-                gate_reason = "ตลาดซบเซาแต่โมเดลใหม่ไม่เน้นเซฟงบ"
-        else:
-            gate_tgt = CONFIG["gate_growth_target_pct"]
-            if abs(growth_pct) < 0.5:
-                # virtually identical — same data re-run
-                is_passed = False
-                gate_reason = (
-                    f"โมเดลใหม่ให้ผลเท่าเดิม ({growth_pct:+.2f}%) — "
-                    f"น่าจะเทรนด้วยข้อมูลชุดเดิม ไม่มี signal ใหม่ คงโมเดลเก่าไว้"
-                )
-            elif growth_pct < 0:
-                is_passed = False
-                gate_reason = (
-                    f"โมเดลใหม่ประเมินกำไรได้ต่ำกว่าโมเดลเก่า {growth_pct:+.2f}% — "
-                    f"อาจเกิดจาก dataset คนละชุด (distribution shift) หรือโมเดลเก่า overoptimistic "
-                    f"คงโมเดลเก่าไว้ก่อน แนะนำ: reset champion ถ้าเปลี่ยน dataset ใหม่ทั้งหมด"
-                )
-            elif growth_pct < gate_tgt:
-                is_passed = False
-                gate_reason = (
-                    f"โมเดลใหม่ดีขึ้นเล็กน้อย {growth_pct:+.2f}% แต่ยังไม่ถึงเกณฑ์ {gate_tgt:.1f}% "
-                    f"ที่ตั้งไว้ — คงโมเดลเก่าไว้"
-                )
-            else:
-                is_passed = True
-                gate_reason = (
-                    f"โมเดลใหม่ดีกว่าโมเดลเก่า {growth_pct:+.2f}% ผ่านเกณฑ์ {gate_tgt:.1f}% — "
-                    f"อัปเดต champion"
-                )
+        current_avg_spent = baseline_avg_spent
+    return bool(current_avg_spent < (baseline_avg_spent * CONFIG["recession_threshold"])), float(current_avg_spent)
 
-    # Calculate should_send early so action breakdown can use it
-    challenger_detail_df['should_send'] = (
-        (challenger_detail_df['guardrail_blocked'] == 0) &
-        (~challenger_detail_df['recommended_action'].str.startswith('Do Nothing'))
-    ).astype(int)
 
-    # --- Action breakdown summary ---
-    action_counts = challenger_detail_df['recommended_action'].value_counts()
-    send_count    = int(challenger_detail_df['should_send'].sum())
-    total_cust    = len(challenger_detail_df)
+@dataclass
+class GateResult:
+    passed: bool
+    reason: str
+    growth_pct: float | None
 
-    print("\n=======================================================")
-    print("      PRODUCTION MODEL VALIDATION GATE REPORT          ")
-    print("=======================================================")
-    if is_recession_mode:
-        print("⚠️  MARKET STATUS: RECESSION — ตลาดซบเซา ใช้กลยุทธ์ป้องกันขาดทุน")
-    else:
-        print("🟢 MARKET STATUS: NORMAL — ตลาดปกติ โมดเติบโตได้")
 
-    if has_champion:
-        diff = challenger_profit - champion_profit
-        print(f"\n📊 ผลประเมินโมเดล (บน {total_cust:,} ลูกค้า):")
-        print(f"   Champion (โมเดลเก่า) : {champion_profit:>12,.2f} บาท")
-        print(f"   Challenger (โมเดลใหม่): {challenger_profit:>12,.2f} บาท  ({growth_pct:+.2f}%)")
-        print(f"   ส่วนต่าง             : {diff:>+12,.2f} บาท")
-        print(f"\n💡 สรุป: {gate_reason}")
-    else:
-        print(f"\n📊 ไม่มีโมเดลเก่า — ใช้ผลประเมิน Challenger: {challenger_profit:,.2f} บาท")
-        print(f"💡 สรุป: บันทึกโมเดลนี้เป็น Champion ตัวแรก")
+def gate_decision(challenger_profit, champion_profit, do_nothing_pct, is_recession, current_avg_spent):
+    """Advice on whether a challenger beats the champion (same rules as the old in-run gate)."""
+    if champion_profit is None:
+        return GateResult(True, "บันทึกโมเดลนี้เป็น Champion ตัวแรก", None)
+    if champion_profit <= 0:
+        return GateResult(False, "กำไรที่ประมาณได้ของ Champion เป็น 0 หรือติดลบ จึงเทียบเป็น % ไม่ได้ — "
+                                 "ให้ผู้อนุมัติพิจารณาเอง", None)
+    growth_pct = ((challenger_profit - champion_profit) / champion_profit) * 100
+    gate_tgt = CONFIG["gate_growth_target_pct"]
+    if is_recession:
+        dn_thr = CONFIG["do_nothing_recession_threshold"]
+        if do_nothing_pct > dn_thr:
+            return GateResult(True, f"⚠️ [RECESSION MODE DETECTED]: ตลาดซบเซา (เฉลี่ย {current_avg_spent:,.2f} บาท) -> "
+                                    f"อนุมัติโมเดลใหม่ที่เน้น Defensive เพื่อเซฟงบ (Do Nothing = {do_nothing_pct:.1f}%)", growth_pct)
+        return GateResult(growth_pct >= gate_tgt, "ตลาดซบเซาแต่โมเดลใหม่ไม่เน้นเซฟงบ", growth_pct)
+    if abs(growth_pct) < 0.5:
+        return GateResult(False, f"โมเดลใหม่ให้ผลเท่าเดิม ({growth_pct:+.2f}%) — "
+                                 f"น่าจะเทรนด้วยข้อมูลชุดเดิม ไม่มี signal ใหม่ คงโมเดลเก่าไว้", growth_pct)
+    if growth_pct < 0:
+        return GateResult(False, f"โมเดลใหม่ประเมินกำไรได้ต่ำกว่าโมเดลเก่า {growth_pct:+.2f}% — "
+                                 f"อาจเกิดจาก dataset คนละชุด (distribution shift) หรือโมเดลเก่า overoptimistic "
+                                 f"คงโมเดลเก่าไว้ก่อน แนะนำ: reset champion ถ้าเปลี่ยน dataset ใหม่ทั้งหมด", growth_pct)
+    if growth_pct < gate_tgt:
+        return GateResult(False, f"โมเดลใหม่ดีขึ้นเล็กน้อย {growth_pct:+.2f}% แต่ยังไม่ถึงเกณฑ์ {gate_tgt:.1f}% "
+                                 f"ที่ตั้งไว้ — คงโมเดลเก่าไว้", growth_pct)
+    return GateResult(True, f"โมเดลใหม่ดีกว่าโมเดลเก่า {growth_pct:+.2f}% ผ่านเกณฑ์ {gate_tgt:.1f}% — "
+                            f"อัปเดต champion", growth_pct)
 
-    print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า):")
-    for action, cnt in action_counts.items():
-        pct = cnt / total_cust * 100
+
+def _check_features(model, features):
+    """The champion must have been fitted on exactly the features this CSV produces."""
+    names = getattr(model, "feature_names_", None)
+    if names is None:
+        # legacy champion (imported as v1) never recorded its feature names: count is all we can verify
+        if model.n_features_ != len(features):
+            raise RegistryError(f"champion was fitted on {model.n_features_} features but this CSV produces "
+                                f"{len(features)} features ({features}); train a new champion for this data")
+        log("L4", "legacy_champion_feature_names_unknown", level="WARN", n_features=len(features))
+    elif list(names) != list(features):
+        raise RegistryError(f"champion expects features {list(names)} but this CSV produces {list(features)}; "
+                            f"train a new champion for this data")
+
+
+def run_layer4(pos_file_path="data/transactions.csv",
+               promo_response_path="data/marketing_campaign.csv",
+               product_cogs_dict=None,
+               default_cogs=None,
+               models_root=None):
+    """Serving: score every customer with the approved champion. Never trains, never writes the registry."""
+    print("=== กำลังประมวลผล Layer 4: Campaign Engine (Serving — ใช้ Champion ที่อนุมัติแล้ว) ===")
+
+    if not os.path.exists(pos_file_path):
+        print(f"❌ ไม่พบไฟล์ข้อมูล: {pos_file_path}")
+        return
+
+    registry = ModelRegistry(models_root or os.path.dirname(REGISTRY_PATH))
+    champion, ref = registry.load_current()   # fails before any output if there is no usable champion
+
+    ctx = build_layer4_context(pos_file_path, promo_response_path, product_cogs_dict, default_cogs)
+    _check_features(champion, ctx.features)
+
+    _, detail = decide_for_customers(champion, ctx)
+
+    total_cust = len(detail)
+    print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า) โดย Champion {ref.version} [{ref.provenance}]:")
+    for action, cnt in detail['recommended_action'].value_counts().items():
         icon = "✅" if not action.startswith("Do Nothing") else "⛔"
-        print(f"   {icon} {action:<45} {cnt:>5,} คน ({pct:.1f}%)")
-
+        print(f"   {icon} {action:<45} {cnt:>5,} คน ({cnt / total_cust * 100:.1f}%)")
     print("-------------------------------------------------------")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(os.path.join(os.path.dirname(REGISTRY_PATH), "archive"), exist_ok=True)
-
-    if is_passed:
-        with open(champion_path, 'wb') as f: pickle.dump(challenger_model, f)
-        print(f"🟢 GATE PASSED — อัปเดต Champion เรียบร้อย (X-learner, n_estimators=200)")
-    else:
-        print(f"🔴 GATE FAILED — คงใช้ Champion เดิม")
-        if has_champion and growth_pct < -5:
-            print(f"   ⚠️  หากเพิ่งเปลี่ยน dataset ใหม่ทั้งหมด ให้รัน: rm models/registry/champion_*.pkl แล้วรันใหม่")
-
-    print("=======================================================\n")
-    
     os.makedirs("data/processed", exist_ok=True)
-    output_path = "data/processed/final_campaign_engine_output.csv"
-    challenger_detail_df.to_csv(output_path, index=False)
+    detail.to_csv("data/processed/final_campaign_engine_output.csv", index=False)
+    atomic_write_text("data/processed/model_used.json", json.dumps(
+        {"champion_version": ref.version, "sha256": ref.sha256, "provenance": ref.provenance}, indent=2))
+    log("L4", "l4_serving_complete", champion_version=ref.version, customers=total_cust,
+        send_count=int(detail['should_send'].sum()))
 
-    # Return per-customer detail df so caller can merge into segment plan
     keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
                  'guardrail_blocked', 'should_send', 'send_window']
-    if 'cluster' in challenger_detail_df.columns:
+    if 'cluster' in detail.columns:
         keep_cols.insert(1, 'cluster')
-    # Guard: send_window may be missing if model was loaded from old checkpoint
-    if 'send_window' not in challenger_detail_df.columns:
-        challenger_detail_df['send_window'] = 'Peak Window'
-    return challenger_detail_df[keep_cols]
+    return detail[keep_cols]
+
 
 if __name__ == "__main__":
     run_layer4()
