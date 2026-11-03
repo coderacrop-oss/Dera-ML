@@ -543,7 +543,14 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
 # Main Execution
 # ==========================================
 if __name__ == "__main__":
-    csv_file = sys.argv[1] if len(sys.argv) > 1 else "data/transactions.csv"
+    import argparse as _ap
+    _parser = _ap.ArgumentParser(add_help=False)
+    _parser.add_argument("csv_file", nargs="?", default="data/transactions.csv")
+    _parser.add_argument("--promo-response", default=None,
+                         help="Path to labels CSV (customer_id, is_treated, post_promo_visit)")
+    _cli, _ = _parser.parse_known_args()
+    csv_file = _cli.csv_file
+    _cli_promo_response = _cli.promo_response
     print("🚀 เริ่มต้นรัน CSV MLOps Campaign Pipeline...\n")
     log("L0", "pipeline_start", csv_file=csv_file)
     _pipeline_start = time.monotonic()
@@ -585,7 +592,11 @@ if __name__ == "__main__":
         _pos_dir = os.path.dirname(_pos_abs)
         _pos_name = os.path.basename(_pos_abs).lower()
         _header = pd.read_csv(_pos_abs, nrows=0).columns.tolist()
-        if 'is_treated' in _header and 'post_promo_visit' in _header:
+        if _cli_promo_response and os.path.exists(_cli_promo_response):
+            # Explicit --promo-response argument takes highest priority
+            promo_path = os.path.abspath(_cli_promo_response)
+            _promo_source = "explicit_arg"
+        elif 'is_treated' in _header and 'post_promo_visit' in _header:
             promo_path = _pos_abs
             _promo_source = "pos_file_direct"
         elif 'marketing_campaign' in _pos_name:

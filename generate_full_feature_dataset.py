@@ -1,392 +1,588 @@
 """
-generate_full_feature_dataset.py
-─────────────────────────────────
-สร้าง synthetic POS dataset ที่ออกแบบให้ exercise ทุก feature ใน 1 run
+generate_full_feature_dataset.py — ML-valid synthetic retail dataset (demo / paper)
 
-Segments (500 customers, 90 days):
-  A. VIP Peak        (50)  — ซื้อช่วง peak 18-21h, AOV สูง, rfm_decile ≥ 8
-                             → ได้: VIP Reward / VIP Early Access
-  B. Off-Peak Mid    (80)  — ซื้อช่วง off-peak 9-12h, AOV กลาง, rfm_decile 4-7
-                             → ได้: Off-Peak Traffic Driver / Off-Peak VIP Points
-  C. Bundle Buyers   (70)  — ซื้อ product pairs ซ้ำๆ สูง (Apriori rules)
-                             → ได้: Push Promotion: Bundle
-  D. Festival Spike  (30)  — spike transactions ช่วง campaign week, rfm ≥ 7
-                             → ได้: Standard Retention (Festival Guard)
-  E. Low Basket      (50)  — AOV < 100 → Do Nothing (Low Basket Size)
-  F. Out of Stock    (60)  — ซื้อ product "HotItem-OOS" เยอะมาก → L3 flags out of stock
-                             → Do Nothing (Out of Stock)
-  G. CFO Block       (80)  — uplift ต่ำ / margin ไม่ผ่าน → Do Nothing (CFO Guardrail)
-  H. Control Flow    (80)  — ซื้อ random ปกติ — expected: Standard Retention หรือ Guardrail
+Rebuilt from scratch.  Previous version was designed for code-path coverage;
+this version is designed for model validation.
 
-Peak hours engineered: 18, 19, 20, 21 (volume >> mean + 0.5*std)
-Out-of-stock trigger: product "HotItem-OOS" — demand > initial_stock_est in last 14 days
+Design goals
+────────────
+1. Heterogeneous τ(x) correlated with RFM
+     → X-learner learns a real signal, not noise
+2. Six latent customer types, no explicit labels in output
+     → k-means must discover segments from behaviour, not pre-painted blobs
+3. Bundle signal concentrated on hero products
+     → Apriori association rules fire (support >> pipeline threshold)
+4. Weekend (+40%) and month-end / payday (+20%) temporal lift
+     → Layer 3 peak-hour detection reflects realistic traffic shape
+5. Lapsing customers churn mid-window
+     → Recency becomes genuinely informative for the model
+6. OOS demand surge in last 14 days
+     → Layer 3 out-of-stock guardrail triggers on real demand signal
+7. 2% return transactions (negative quantity)
+     → Layer 4 data-hygiene filter has real work to do
+
+Outputs
+───────
+  data/synthetic_full_features.csv          transaction history (no labels)
+  data/synthetic_full_features_labels.csv   per-customer treatment + outcome
 """
-
 from __future__ import annotations
 
 import argparse
 import os
-import random
-from datetime import datetime, timedelta
+from datetime import date, timedelta
+from math import exp
 
 import numpy as np
 import pandas as pd
 
-OUT_PATH = "data/synthetic_full_features.csv"
-LABELS_PATH = "data/synthetic_full_features_labels.csv"
+# ── Timeline ───────────────────────────────────────────────────────────────────
+START_DATE = date(2026, 7, 1)
+END_DATE   = date(2026, 10, 29)   # 120-day observation window
+N_DAYS     = (END_DATE - START_DATE).days  # 120
 
-# ── Config mirrors business_config.py thresholds ────────────────────────────
-PEAK_HOURS    = [18, 19, 20, 21]      # will be >> mean+0.5*std
-OFFPEAK_HOURS = [9, 10, 11, 12]
-MID_HOURS     = [13, 14, 15, 16, 17]  # medium volume
+# ── Products ───────────────────────────────────────────────────────────────────
+# Two hero bundle pairs — concentrated so Apriori support >> threshold
+HERO_A, HERO_B = "Coffee-Mug",   "Tea-Infuser"    # bundle pair 1
+HERO_C, HERO_D = "Notebook-A5",  "Ballpoint-Pen"  # bundle pair 2
 
-LOW_BASKET_THRESHOLD = 100   # AOV < 100 → Do Nothing (Low Basket)
-COGS_RATE     = 0.50
-MIN_MARGIN    = 0.15
-DISCOUNT_RATE = 0.15
+# Out-of-stock product (demand surge injected in last 14 days)
+OOS_PRODUCT = "Winter-Candle-Set"
 
-# Products
-PEAK_PRODUCTS    = ["GiftSet-Premium", "HomeDecor-Luxury", "Candle-Collection"]
-OFFPEAK_PRODUCTS = ["Wall-Art-Print", "Ceramic-Mug", "Photo-Frame"]
-BUNDLE_A         = ["Cushion-Cover", "Throw-Blanket"]   # ← Apriori pair
-BUNDLE_B         = ["Table-Lamp", "Lampshade"]          # ← Apriori pair
-FESTIVAL_PRODS   = ["Christmas-Ornament", "Gift-Wrap-Set"]
-LOW_PRODUCTS     = ["Sticker-Pack", "Bookmark"]         # cheap → low AOV
-OOS_PRODUCT      = "HotItem-OOS"                        # engineered stockout
-GENERIC_PRODS    = ["Storage-Box", "Plant-Pot", "Door-Mat", "Coaster-Set", "Mirror-Frame"]
+# Long-tail (15 items)
+LONG_TAIL = [
+    "Coaster-Set",    "Wall-Art-Print", "Plant-Pot",      "Storage-Box",
+    "Ceramic-Vase",   "Mirror-Frame",   "Door-Mat",       "Cushion-Cover",
+    "Throw-Blanket",  "Photo-Frame",    "Desk-Organiser", "Scented-Candle",
+    "Gift-Wrap-Kit",  "Cotton-Tote",    "Bamboo-Tray",
+]
 
-START_DATE = datetime(2026, 8, 1)
-END_DATE   = datetime(2026, 10, 29)  # 90 days
+# Per-product unit_price ranges
+PRICE: dict[str, tuple[float, float]] = {
+    HERO_A:       (8.0,   15.0),
+    HERO_B:       (12.0,  25.0),
+    HERO_C:       (5.0,   12.0),
+    HERO_D:       (3.0,    8.0),
+    OOS_PRODUCT:  (25.0,  50.0),
+    "Coaster-Set":    (15.0,  40.0),
+    "Wall-Art-Print": (80.0, 250.0),
+    "Plant-Pot":      (20.0,  60.0),
+    "Storage-Box":    (25.0,  70.0),
+    "Ceramic-Vase":   (40.0, 120.0),
+    "Mirror-Frame":   (60.0, 180.0),
+    "Door-Mat":       (20.0,  55.0),
+    "Cushion-Cover":  (18.0,  45.0),
+    "Throw-Blanket":  (30.0,  80.0),
+    "Photo-Frame":    (15.0,  50.0),
+    "Desk-Organiser": (20.0,  60.0),
+    "Scented-Candle": (12.0,  35.0),
+    "Gift-Wrap-Kit":  (8.0,   20.0),
+    "Cotton-Tote":    (10.0,  30.0),
+    "Bamboo-Tray":    (25.0,  70.0),
+}
+
+# ── Shopping hours ─────────────────────────────────────────────────────────────
+PEAK_HOURS     = [18, 19, 20, 21]
+OFF_PEAK_HOURS = [9, 10, 11, 12, 13, 14, 15, 16, 17]
+ALL_HOURS      = OFF_PEAK_HOURS + PEAK_HOURS
+
+# ── Latent customer types ──────────────────────────────────────────────────────
+# Labels NOT in output — k-means must rediscover these from RFM.
+#
+# tau_base   : expected treatment effect for this type
+# visits     : (min, max) visits in the full 120-day window
+# aov        : (min, max) target order value per visit (THB / GBP / USD — unit-neutral)
+# hours      : preferred shopping hours
+# churn_day  : (min, max) day offset after which the customer goes silent; None = no churn
+TYPES: dict[str, dict] = {
+    "loyal": {
+        "n": 90,
+        "visits": (20, 40),
+        "aov":    (180, 450),
+        "tau_base": 0.08,      # already buying → small incremental uplift
+        "hours": PEAK_HOURS,
+        "churn_day": None,
+    },
+    "deal_seeker": {
+        "n": 150,
+        "visits": (8, 18),
+        "aov":    (80, 200),
+        "tau_base": 0.34,      # buys primarily on promo → largest uplift
+        "hours": PEAK_HOURS,
+        "churn_day": None,
+    },
+    "occasional": {
+        "n": 90,
+        "visits": (3, 8),
+        "aov":    (280, 650),  # low frequency, large basket
+        "tau_base": 0.17,
+        "hours": OFF_PEAK_HOURS,
+        "churn_day": None,
+    },
+    "lapsing": {
+        "n": 120,
+        "visits": (8, 18),     # active only in the early window
+        "aov":    (100, 280),
+        "tau_base": 0.26,      # winback opportunity → high uplift
+        "hours": OFF_PEAK_HOURS,
+        "churn_day": (25, 65), # go silent between day 25 and 65
+    },
+    "new_cust": {
+        "n": 90,
+        "visits": (2, 6),      # recently onboarded
+        "aov":    (50, 150),
+        "tau_base": 0.14,
+        "hours": ALL_HOURS,
+        "churn_day": None,
+    },
+    "low_value": {
+        "n": 60,
+        "visits": (2, 6),
+        "aov":    (18, 55),    # low basket → triggers guardrail
+        "tau_base": 0.04,      # near-zero treatment effect
+        "hours": OFF_PEAK_HOURS,
+        "churn_day": None,
+    },
+}
+# Total: 90+150+90+120+90+60 = 600 customers
 
 
-def rand_dt(rng, start, end, hours):
-    """Random datetime within window, constrained to given hours."""
-    delta = (end - start).days
-    d = start + timedelta(days=int(rng.integers(0, delta)))
-    h = int(rng.choice(hours))
-    m = int(rng.integers(0, 60))
-    return d.replace(hour=h, minute=m, second=0)
+# ── Temporal weights ───────────────────────────────────────────────────────────
+def _day_weight(d: date) -> float:
+    w = 1.0
+    if d.weekday() >= 5:   # Saturday / Sunday
+        w *= 1.40
+    if d.day >= 28:        # month-end payday spike
+        w *= 1.20
+    return w
 
 
-def make_transaction(tx_id, customer_id, dt, product, qty, unit_price,
-                     is_treated=0, post_promo_visit=0, promo_type="none"):
-    return {
-        "transaction_id":  tx_id,
-        "customer_id":     customer_id,
-        "timestamp":       dt.strftime("%Y-%m-%d %H:%M:%S"),
-        "product_name":    product,
-        "quantity":        qty,
-        "unit_price":      unit_price,
-        "is_treated":      is_treated,
-        "post_promo_visit": post_promo_visit,
-        "promo_type":      promo_type,
-    }
+def _date_weights(n_days: int) -> np.ndarray:
+    days = [START_DATE + timedelta(days=i) for i in range(n_days)]
+    w = np.array([_day_weight(d) for d in days], dtype=float)
+    return w / w.sum()
 
 
-def generate(seed=42):
+# ── Basket generation ──────────────────────────────────────────────────────────
+def _gen_basket(
+    rng: np.random.Generator,
+    ctype: str,
+    aov_lo: float,
+    aov_hi: float,
+) -> list[tuple[str, float, int]]:
+    """
+    One shopping basket → list of (product, unit_price, qty).
+
+    Hero bundles are co-purchased with high probability so that
+    Apriori sees support >> pipeline threshold.
+    """
+    items: list[tuple[str, float, int]] = []
+
+    # Loyal and deal-seekers are drawn to hero products more
+    hero_boost = 1.45 if ctype in ("loyal", "deal_seeker") else 1.0
+
+    # Hero pair 1: Coffee-Mug  + Tea-Infuser (72% co-purchase)
+    if rng.random() < min(0.44 * hero_boost, 0.92):
+        items.append((HERO_A, float(rng.uniform(*PRICE[HERO_A])), 1))
+        if rng.random() < 0.72:
+            items.append((HERO_B, float(rng.uniform(*PRICE[HERO_B])), 1))
+
+    # Hero pair 2: Notebook-A5 + Ballpoint-Pen (66% co-purchase)
+    if rng.random() < min(0.34 * hero_boost, 0.82):
+        items.append((HERO_C, float(rng.uniform(*PRICE[HERO_C])), 1))
+        if rng.random() < 0.66:
+            items.append((HERO_D, float(rng.uniform(*PRICE[HERO_D])), 1))
+
+    # Fill up to AOV target from long-tail
+    target = float(rng.uniform(aov_lo, aov_hi))
+    current = sum(p * q for _, p, q in items)
+    fill_count = 0
+    while current < target * 0.75 and fill_count < 6:
+        prod  = str(rng.choice(LONG_TAIL))
+        lo, hi = PRICE[prod]
+        qty   = int(rng.integers(2, 5)) if rng.random() < 0.08 else 1
+        price = float(rng.uniform(lo, hi))
+        items.append((prod, price, qty))
+        current += price * qty
+        fill_count += 1
+
+    # Guarantee at least one item
+    if not items:
+        prod = str(rng.choice(LONG_TAIL))
+        items.append((prod, float(rng.uniform(*PRICE[prod])), 1))
+
+    return items
+
+
+# ── Treatment effect and conversion ───────────────────────────────────────────
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + exp(-float(np.clip(x, -20, 20))))
+
+
+def _true_tau(
+    ctype: str,
+    freq_n: float,
+    mon_n: float,
+    rec_n: float,
+    rng: np.random.Generator,
+) -> float:
+    """
+    Heterogeneous treatment effect τ(x) — deliberately correlated with
+    observable RFM so the X-learner has real signal to learn.
+
+    Intuition
+    ─────────
+    High frequency  → lower τ  (loyal buyers don't need nudging)
+    High recency    → higher τ  (lapsed customers respond to winback)
+    Mid monetary    → highest τ  (deal-seekers sit in middle of spend range)
+    """
+    base = TYPES[ctype]["tau_base"]
+    mod  = (
+        -0.18 * freq_n
+        + 0.12 * rec_n
+        + 0.08 * (1.0 - abs(mon_n - 0.5) * 2.0)   # peak at mon_n = 0.5
+    )
+    noise = float(rng.normal(0, 0.02))
+    return float(np.clip(base + mod + noise, 0.01, 0.70))
+
+
+def _conv_prob(
+    freq_n: float,
+    mon_n: float,
+    rec_n: float,
+    treated: int,
+    tau: float,
+) -> float:
+    """
+    P(purchase after campaign) = sigmoid(log-odds from RFM) + T·τ(x)
+
+    Loyal  (high freq, low rec)  → high base  ≈ 50%
+    Lapsing (high rec)           → low base   ≈  8%  but large τ
+    Low-value (low mon, low freq)→ low base   ≈  8%  and tiny τ
+    """
+    log_odds = -2.2 + 1.8 * freq_n + 0.9 * mon_n - 1.0 * rec_n
+    base = _sigmoid(log_odds)
+    return float(np.clip(base + treated * tau, 0.02, 0.95))
+
+
+# ── Main generator ─────────────────────────────────────────────────────────────
+def generate(seed: int = 42) -> None:
     rng = np.random.default_rng(seed)
-    random.seed(seed)
 
-    rows = []
-    tx_counter = [0]
+    day_idx  = np.arange(N_DAYS)
+    dw       = _date_weights(N_DAYS)
+    all_days = [START_DATE + timedelta(days=int(i)) for i in range(N_DAYS)]
 
-    def next_tx():
-        tx_counter[0] += 1
-        return f"T{tx_counter[0]:06d}"
+    rows:   list[dict] = []
+    c_meta: list[dict] = []   # (customer_id, ctype, churn_day)
+    cid_n  = 0
 
-    # ── ฟังก์ชันช่วย: เพิ่มธุรกรรมให้ customer ────────────────────────────
-    def add_txs(cid, n_visits, hours, products, price_range, is_treated, ppv, promo,
-                multi_item=False, force_end=False):
-        """Add n_visits transactions for a customer."""
-        for v in range(n_visits):
-            if force_end:
-                # ซื้อใน 14 วันสุดท้าย (สำหรับ OOS trigger)
-                dt = rand_dt(rng, END_DATE - timedelta(days=14), END_DATE, hours)
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 1 — Transaction history
+    # ──────────────────────────────────────────────────────────────────────────
+    for ctype, cfg in TYPES.items():
+        for _ in range(cfg["n"]):
+            cid = f"C{cid_n:04d}"
+            cid_n += 1
+
+            n_visits = int(rng.integers(cfg["visits"][0], cfg["visits"][1] + 1))
+
+            # Churn: lapsing customers go silent after churn_day
+            if cfg["churn_day"] is not None:
+                churn = int(rng.integers(cfg["churn_day"][0], cfg["churn_day"][1] + 1))
             else:
-                dt = rand_dt(rng, START_DATE, END_DATE, hours)
-            product = products[int(rng.integers(0, len(products)))]
-            qty = int(rng.integers(1, 4))
-            price = round(float(rng.uniform(*price_range)), 2)
-            rows.append(make_transaction(next_tx(), cid, dt, product, qty, price,
-                                         is_treated, ppv, promo))
-            if multi_item:
-                # เพิ่ม item ที่สองใน same basket (same timestamp) เพื่อ Apriori
-                product2 = products[(products.index(product) + 1) % len(products)]
-                rows.append(make_transaction(next_tx(), cid, dt, product2, 1, price * 0.8,
-                                             is_treated, ppv, promo))
+                churn = N_DAYS
+            c_meta.append({"customer_id": cid, "ctype": ctype, "churn_day": churn})
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment A: VIP Peak (50 customers)
-    # Goal: rfm_decile ≥ 8 (high frequency + recency + monetary)
-    #       peak hours 18-21, AOV 300-600 → VIP Reward / VIP Early Access
-    # Treatment: 60% treated (high response in peak)
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(50):
-        cid = f"VIP-{i:03d}"
-        treated = 1 if rng.random() < 0.6 else 0
-        ppv = 1 if treated and rng.random() < 0.75 else (1 if not treated and rng.random() < 0.40 else 0)
-        promo = "discount" if treated else "none"
-        add_txs(cid, n_visits=int(rng.integers(12, 20)), hours=PEAK_HOURS,
-                products=PEAK_PRODUCTS, price_range=(300, 600),
-                is_treated=treated, ppv=ppv, promo=promo)
+            # Sample visit days with temporal weights, restricted to pre-churn window
+            mask = day_idx < churn
+            w_active = dw * mask
+            if w_active.sum() == 0:
+                continue
+            w_active /= w_active.sum()
+            visit_days = sorted(
+                rng.choice(day_idx, size=n_visits, p=w_active).tolist()
+            )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment B: Off-Peak Mid-tier (80 customers)
-    # Goal: majority off-peak context, rfm_decile 4-7, AOV 150-400
-    #       → Off-Peak Traffic Driver / Off-Peak VIP Points
-    # Treatment: 40% treated
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(80):
-        cid = f"OFP-{i:03d}"
-        treated = 1 if rng.random() < 0.4 else 0
-        ppv = 1 if treated and rng.random() < 0.58 else (1 if not treated and rng.random() < 0.30 else 0)
-        promo = "coupon" if treated else "none"
-        # 80% ของ visits อยู่ช่วง off-peak, 20% mid-hours
-        n_off = int(rng.integers(6, 12))
-        n_mid = int(rng.integers(1, 3))
-        add_txs(cid, n_visits=n_off, hours=OFFPEAK_HOURS,
-                products=OFFPEAK_PRODUCTS, price_range=(150, 400),
-                is_treated=treated, ppv=ppv, promo=promo)
-        add_txs(cid, n_visits=n_mid, hours=MID_HOURS,
-                products=OFFPEAK_PRODUCTS, price_range=(150, 400),
-                is_treated=treated, ppv=ppv, promo=promo)
+            for v_idx, day_off in enumerate(visit_days):
+                vdate  = START_DATE + timedelta(days=int(day_off))
+                hour   = int(rng.choice(cfg["hours"]))
+                minute = int(rng.integers(0, 60))
+                ts     = f"{vdate} {hour:02d}:{minute:02d}:00"
+                inv_id = f"{cid}_{vdate}_{v_idx}"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment C: Bundle Buyers (70 customers)
-    # Goal: ซื้อ BUNDLE_A pair และ BUNDLE_B pair บ่อยในรอบเดียว
-    #       Apriori จะเจอ rules: Cushion-Cover → Throw-Blanket, Table-Lamp → Lampshade
-    # Treatment: 40% treated
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(70):
-        cid = f"BND-{i:03d}"
-        treated = 1 if rng.random() < 0.4 else 0
-        ppv = 1 if treated and rng.random() < 0.62 else (1 if not treated and rng.random() < 0.35 else 0)
-        promo = "discount" if treated else "none"
-        # ซื้อ bundle pair ทั้งคู่ในรอบเดียว (multi_item=True)
-        add_txs(cid, n_visits=int(rng.integers(5, 10)),
-                hours=PEAK_HOURS + OFFPEAK_HOURS,
-                products=BUNDLE_A, price_range=(200, 450),
-                is_treated=treated, ppv=ppv, promo=promo, multi_item=True)
-        add_txs(cid, n_visits=int(rng.integers(3, 7)),
-                hours=PEAK_HOURS + OFFPEAK_HOURS,
-                products=BUNDLE_B, price_range=(180, 380),
-                is_treated=treated, ppv=ppv, promo=promo, multi_item=True)
+                for prod, uprice, qty in _gen_basket(
+                    rng, ctype, cfg["aov"][0], cfg["aov"][1]
+                ):
+                    rows.append({
+                        "customer_id":  cid,
+                        "timestamp":    ts,
+                        "invoice_id":   inv_id,
+                        "product_name": prod,
+                        "unit_price":   round(uprice, 2),
+                        "quantity":     qty,
+                    })
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment D: Festival Spike (30 customers)
-    # Goal: transaction ราคาสูงมาก (spike) ช่วง campaign week + rfm_seg ≥ 7
-    #       is_campaign_spike = 1 เมื่อ total_price > mean + 2.5*std
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(30):
-        cid = f"FST-{i:03d}"
-        treated = 1 if rng.random() < 0.5 else 0
-        ppv = 1 if treated and rng.random() < 0.65 else (1 if not treated and rng.random() < 0.40 else 0)
-        promo = "coupon" if treated else "none"
-        # Normal transactions
-        add_txs(cid, n_visits=int(rng.integers(6, 10)),
-                hours=PEAK_HOURS, products=FESTIVAL_PRODS, price_range=(200, 400),
-                is_treated=treated, ppv=ppv, promo=promo)
-        # Spike transactions (very high price → triggers is_campaign_spike)
-        for _ in range(int(rng.integers(2, 5))):
-            dt = rand_dt(rng, START_DATE, END_DATE, PEAK_HOURS)
-            rows.append(make_transaction(
-                next_tx(), cid, dt,
-                product=FESTIVAL_PRODS[0],
-                qty=int(rng.integers(3, 8)),
-                unit_price=round(float(rng.uniform(1500, 3000)), 2),  # ← spike price
-                is_treated=treated, post_promo_visit=ppv, promo_type=promo
-            ))
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 2 — OOS demand surge (last 14 days)
+    # 60 "occasional" customers are OOS-affine; surge quantity >> initial estimate
+    # ──────────────────────────────────────────────────────────────────────────
+    oos_affine = [m["customer_id"] for m in c_meta if m["ctype"] == "occasional"][:60]
+    oos_surge_start = END_DATE - timedelta(days=14)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment E: Low Basket (50 customers)
-    # Goal: AOV < 100 → Do Nothing (Low Basket Size)
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(50):
-        cid = f"LOW-{i:03d}"
-        treated = 1 if rng.random() < 0.4 else 0
-        ppv = 1 if treated and rng.random() < 0.30 else 0
-        add_txs(cid, n_visits=int(rng.integers(3, 7)),
-                hours=PEAK_HOURS + OFFPEAK_HOURS,
-                products=LOW_PRODUCTS, price_range=(10, 60),   # ← AOV < 100
-                is_treated=treated, ppv=ppv, promo="none")
+    for cid in oos_affine:
+        # Baseline OOS purchases before surge window
+        for i in range(int(rng.integers(2, 5))):
+            day_off = int(rng.integers(0, N_DAYS - 14))
+            vdate   = START_DATE + timedelta(days=day_off)
+            ts      = f"{vdate} {int(rng.choice(OFF_PEAK_HOURS)):02d}:{int(rng.integers(0,60)):02d}:00"
+            rows.append({
+                "customer_id":  cid,
+                "timestamp":    ts,
+                "invoice_id":   f"{cid}_oos_base_{i}",
+                "product_name": OOS_PRODUCT,
+                "unit_price":   round(float(rng.uniform(*PRICE[OOS_PRODUCT])), 2),
+                "quantity":     int(rng.integers(1, 3)),
+            })
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment F: Out-of-Stock (60 customers)
-    # Goal: ซื้อ OOS_PRODUCT เยอะใน 14 วันสุดท้ายมากๆ
-    #       → L3 คำนวณ remaining_stock ≤ initial_stock_est * 0.20 → in_stock = False
-    #       → Do Nothing (Out of Stock)
-    #
-    # Logic: initial_stock_est = daily_rate * 14 * 1.5
-    #        recent_demand = qty ใน 14 วันสุดท้าย
-    #        remaining = initial - recent
-    #        in_stock = remaining > max(5, initial * 0.20)
-    #        → ต้องการ recent_demand > initial * 0.80
-    #        → recent_demand > (daily_rate * 14 * 1.5) * 0.80
-    #        → เพิ่ม demand ใน 14 วันสุดท้ายให้ >> daily_rate * 14
-    # ─────────────────────────────────────────────────────────────────────────
-    # สร้าง background transactions ปกติ (เพื่อ establish daily_rate)
-    for i in range(60):
-        cid = f"OOS-{i:03d}"
-        treated = 1 if rng.random() < 0.35 else 0
-        ppv = 1 if treated and rng.random() < 0.35 else 0
-        # Background: small qty ตลอด 76 วันแรก
-        add_txs(cid, n_visits=int(rng.integers(3, 6)),
-                hours=PEAK_HOURS + OFFPEAK_HOURS,
-                products=[OOS_PRODUCT], price_range=(200, 350),
-                is_treated=treated, ppv=ppv, promo="none")
+        # Surge: high-quantity orders in last 14 days (drives recent_demand >> initial_est)
+        for i in range(int(rng.integers(4, 9))):
+            day_off = int(rng.integers(N_DAYS - 14, N_DAYS))
+            vdate   = START_DATE + timedelta(days=day_off)
+            ts      = f"{vdate} {int(rng.choice(OFF_PEAK_HOURS)):02d}:{int(rng.integers(0,60)):02d}:00"
+            rows.append({
+                "customer_id":  cid,
+                "timestamp":    ts,
+                "invoice_id":   f"{cid}_oos_surge_{i}",
+                "product_name": OOS_PRODUCT,
+                "unit_price":   round(float(rng.uniform(*PRICE[OOS_PRODUCT])), 2),
+                "quantity":     int(rng.integers(8, 22)),   # high qty = demand signal
+            })
 
-    # เพิ่ม demand surge ใน 14 วันสุดท้ายสำหรับ OOS product (ซื้อหลายรายการต่อครั้ง)
-    # ต้องการ recent_demand >> daily_rate * 14
-    # สร้าง spike demand จาก customers เพิ่มเติม (ไม่ใช่ customer เดิม) เพื่อให้ total qty สูง
-    n_oos_customers = 60
-    for j in range(200):  # 200 additional surge transactions from OOS customers
-        cid = f"OOS-{int(rng.integers(0, n_oos_customers)):03d}"
-        dt = rand_dt(rng, END_DATE - timedelta(days=14), END_DATE,
-                     PEAK_HOURS + OFFPEAK_HOURS)
-        qty = int(rng.integers(8, 20))   # ← qty สูงมาก ทำให้ recent_demand >> initial
-        rows.append(make_transaction(
-            next_tx(), cid, dt, OOS_PRODUCT, qty,
-            round(float(rng.uniform(200, 350)), 2),
-            0, 0, "none"
-        ))
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 3 — Peak-hour background traffic
+    # Adds 500 extra transactions in 18-21h from loyal/deal_seeker customers
+    # so that hourly volume in 18-21 >> mean + 0.5·std  (threshold detection)
+    # ──────────────────────────────────────────────────────────────────────────
+    peak_customers = [m["customer_id"] for m in c_meta
+                      if m["ctype"] in ("loyal", "deal_seeker")]
+    for bg in range(500):
+        cid     = str(rng.choice(peak_customers))
+        day_off = int(rng.choice(day_idx, p=dw))
+        vdate   = START_DATE + timedelta(days=day_off)
+        hour    = int(rng.choice(PEAK_HOURS))
+        minute  = int(rng.integers(0, 60))
+        ts      = f"{vdate} {hour:02d}:{minute:02d}:00"
+        prod    = str(rng.choice([HERO_A, HERO_B] + LONG_TAIL[:5]))
+        rows.append({
+            "customer_id":  cid,
+            "timestamp":    ts,
+            "invoice_id":   f"{cid}_pk_{bg}",
+            "product_name": prod,
+            "unit_price":   round(float(rng.uniform(*PRICE[prod])), 2),
+            "quantity":     1,
+        })
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment G: CFO Block (80 customers)
-    # Goal: uplift ต่ำ / เพื่อให้ guardrail block
-    #       - high prob_control (ซื้อบ่อยอยู่แล้ว) → incremental ≈ 0 → guardrail block
-    #       - rfm ปานกลาง, treated/not-treated มั่ว → model ไม่ถนัดแยก
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(80):
-        cid = f"CFO-{i:03d}"
-        # is_treated random ไม่มี signal → uplift ≈ 0
-        treated = int(rng.random() < 0.5)
-        # response rate เท่ากัน treated/control → ไม่มี treatment effect
-        ppv = 1 if rng.random() < 0.45 else 0   # same rate treated+control
-        add_txs(cid, n_visits=int(rng.integers(4, 8)),
-                hours=PEAK_HOURS + OFFPEAK_HOURS,
-                products=GENERIC_PRODS, price_range=(120, 280),
-                is_treated=treated, ppv=ppv, promo="none")
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 4 — Returns (2% of rows, negative quantity)
+    # Pipeline filters amount <= 0 so these test data-hygiene logic
+    # ──────────────────────────────────────────────────────────────────────────
+    n_base = len(rows)
+    for idx in rng.choice(n_base, size=int(n_base * 0.02), replace=False):
+        orig = rows[idx]
+        if orig["product_name"] == OOS_PRODUCT:
+            continue  # keep OOS demand signal clean
+        ret = dict(orig)
+        ret["quantity"]   = -ret["quantity"]
+        ret["invoice_id"] = orig["invoice_id"] + "_RET"
+        try:
+            ret_ts = pd.Timestamp(orig["timestamp"]) + pd.Timedelta(
+                days=int(rng.integers(1, 4))
+            )
+            ret["timestamp"] = str(ret_ts)
+        except Exception:
+            pass
+        rows.append(ret)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Segment H: General (80 customers)
-    # Mix ปกติ — expected: Standard Retention หรือ Guardrail
-    # ─────────────────────────────────────────────────────────────────────────
-    for i in range(80):
-        cid = f"GEN-{i:03d}"
-        treated = 1 if rng.random() < 0.4 else 0
-        ppv = 1 if treated and rng.random() < 0.50 else (1 if not treated and rng.random() < 0.30 else 0)
-        promo = random.choice(["coupon", "discount"]) if treated else "none"
-        add_txs(cid, n_visits=int(rng.integers(3, 9)),
-                hours=PEAK_HOURS + MID_HOURS + OFFPEAK_HOURS,
-                products=GENERIC_PRODS, price_range=(100, 350),
-                is_treated=treated, ppv=ppv, promo=promo)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # เพิ่ม background volume ให้ off-peak hours มี volume ปานกลาง
-    # และ peak hours 18-21 มี volume สูงชัดเจน (เพื่อ L3 detection)
-    # ─────────────────────────────────────────────────────────────────────────
-    # เพิ่ม peak hour transactions เพิ่มเติมให้ชัด
-    for _ in range(400):
-        cid = f"VIP-{int(rng.integers(0, 50)):03d}"
-        dt = rand_dt(rng, START_DATE, END_DATE, PEAK_HOURS)
-        rows.append(make_transaction(
-            next_tx(), cid, dt,
-            PEAK_PRODUCTS[int(rng.integers(0, len(PEAK_PRODUCTS)))],
-            int(rng.integers(1, 3)),
-            round(float(rng.uniform(300, 600)), 2)
-        ))
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Build DataFrame + total_price
-    # ─────────────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 5 — Build transaction DataFrame
+    # ──────────────────────────────────────────────────────────────────────────
     df = pd.DataFrame(rows)
-    df["total_price"] = df["quantity"] * df["unit_price"]
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["transaction_date"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("transaction_date").reset_index(drop=True)
 
-    # ── สรุป stats ──────────────────────────────────────────────────────────
+    df_pos = df[df["quantity"] > 0].copy()
+    df_pos["amount"] = df_pos["unit_price"] * df_pos["quantity"]
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 6 — Compute RFM and normalise (for τ modulation)
+    # ──────────────────────────────────────────────────────────────────────────
+    ref = df_pos["transaction_date"].max() + pd.Timedelta(days=1)
+    rfm = df_pos.groupby("customer_id").agg(
+        recency  =("transaction_date", lambda x: (ref - x.max()).days),
+        frequency=("invoice_id", "nunique"),
+        monetary =("amount", "sum"),
+    ).reset_index()
+
+    # Clip-normalise to [0,1] using 1st–99th percentile
+    for col in ("recency", "frequency", "monetary"):
+        lo_p = rfm[col].quantile(0.01)
+        hi_p = rfm[col].quantile(0.99)
+        rfm[f"{col}_n"] = ((rfm[col] - lo_p) / (hi_p - lo_p + 1e-9)).clip(0, 1)
+
+    rfm_idx = rfm.set_index("customer_id")[
+        ["recency_n", "frequency_n", "monetary_n"]
+    ].to_dict("index")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 7 — Treatment assignment + conversion (labels only — not in txn CSV)
+    # ──────────────────────────────────────────────────────────────────────────
+    meta_df = pd.DataFrame(c_meta)
+    meta_df["is_treated"] = rng.binomial(1, 0.40, len(meta_df))
+
+    label_rows = []
+    for _, row in meta_df.iterrows():
+        cid     = row["customer_id"]
+        ctype   = row["ctype"]
+        treated = int(row["is_treated"])
+        norms   = rfm_idx.get(cid, {"recency_n": 0.5, "frequency_n": 0.5, "monetary_n": 0.5})
+
+        tau    = _true_tau(ctype, norms["frequency_n"], norms["monetary_n"],
+                           norms["recency_n"], rng)
+        prob   = _conv_prob(norms["frequency_n"], norms["monetary_n"],
+                            norms["recency_n"], treated, tau)
+        bought = int(rng.binomial(1, prob))
+
+        aov_lo, aov_hi = TYPES[ctype]["aov"]
+        order_value = round(float(rng.uniform(aov_lo, aov_hi)), 2) if bought else 0.0
+
+        label_rows.append({
+            "customer_id":      cid,
+            "is_treated":       treated,
+            "post_promo_visit": bought,
+            "order_value":      order_value,
+        })
+
+    labels_df = pd.DataFrame(label_rows)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 8 — Diagnostics
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # Peak-hour detection
+    df_pos["hour"] = df_pos["transaction_date"].dt.hour
+    hourly    = df_pos.groupby("hour").size()
+    h_mean    = hourly.mean()
+    h_std     = hourly.std()
+    threshold = h_mean + 0.5 * h_std
+    peak_det  = sorted([h for h, v in hourly.items() if v > threshold])
+
+    # OOS check
+    oos_txns  = df_pos[df_pos["product_name"] == OOS_PRODUCT]
+    daily_r   = len(oos_txns) / N_DAYS
+    init_est  = int(daily_r * 60)
+    surge_cut = pd.Timestamp(oos_surge_start)
+    rec_dem   = int(oos_txns[oos_txns["transaction_date"] >= surge_cut]["quantity"].sum())
+    remaining = max(0, init_est - rec_dem)
+    in_stock  = remaining > max(5, int(init_est * 0.20))
+
+    # Bundle support for Apriori validation
+    n_inv = df_pos["invoice_id"].nunique()
+    ab_inv = df_pos[df_pos["product_name"].isin([HERO_A, HERO_B])].groupby(
+        "invoice_id")["product_name"].nunique()
+    ab_sup = (ab_inv >= 2).sum() / max(n_inv, 1)
+    cd_inv = df_pos[df_pos["product_name"].isin([HERO_C, HERO_D])].groupby(
+        "invoice_id")["product_name"].nunique()
+    cd_sup = (cd_inv >= 2).sum() / max(n_inv, 1)
+    min_sup = 0.05 if n_inv > 5000 else (0.02 if n_inv > 1000 else 0.01)
+
+    # Conversion by type (shows τ heterogeneity)
+    # meta_df already has is_treated; merge only the outcome column from labels_df
+    stats = meta_df.merge(
+        labels_df[["customer_id", "post_promo_visit"]],
+        on="customer_id",
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 9 — Export
+    # ──────────────────────────────────────────────────────────────────────────
+    os.makedirs("data", exist_ok=True)
+    txn_cols = ["customer_id", "timestamp", "invoice_id",
+                "product_name", "unit_price", "quantity"]
+    df[txn_cols].to_csv("data/synthetic_full_features.csv", index=False)
+    labels_df.to_csv("data/synthetic_full_features_labels.csv", index=False)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Diagnostic report
+    # ──────────────────────────────────────────────────────────────────────────
     n_cust = df["customer_id"].nunique()
     n_tx   = len(df)
-    date_range = f"{df['timestamp'].min()[:10]} → {df['timestamp'].max()[:10]}"
-    treated_pct = df.drop_duplicates("customer_id")["is_treated"].mean() * 100
+    tr_n   = labels_df["is_treated"].sum()
+    cv_t   = labels_df[labels_df["is_treated"] == 1]["post_promo_visit"].mean()
+    cv_c   = labels_df[labels_df["is_treated"] == 0]["post_promo_visit"].mean()
 
-    # Hourly volume (preview)
-    df_ts = pd.to_datetime(df["timestamp"])
-    hourly = df_ts.dt.hour.value_counts().sort_index()
-    mean_v = hourly.mean()
-    std_v  = hourly.std()
-    thresh = mean_v + 0.5 * std_v
-    peak_detected = sorted(hourly[hourly > thresh].index.tolist())
+    print("=" * 62)
+    print("  ML-Valid Synthetic Dataset (demo / paper)")
+    print("=" * 62)
+    print(f"  Customers    : {n_cust:,}")
+    print(f"  Transactions : {n_tx:,}  (incl. {int(n_tx/n_cust)} avg / customer)")
+    print(f"  Baskets      : {n_inv:,}  ({n_inv/n_cust:.1f} avg / customer)")
+    print(f"  Date range   : {START_DATE} → {df['transaction_date'].max().date()}")
+    print(f"  Treated      : {tr_n} ({tr_n/len(labels_df)*100:.0f}%)")
+    print()
+    print(f"  Overall conversion:")
+    print(f"    Treated  : {cv_t:.1%}")
+    print(f"    Control  : {cv_c:.1%}")
+    print(f"    True lift: {cv_t - cv_c:+.1%}  ← X-learner should recover this")
+    print()
+    print("  τ(x) heterogeneity by latent type  (validates correlated uplift):")
+    print(f"  {'type':12s}  {'n':>4}  {'treated':>8}  {'control':>8}  {'lift':>7}")
+    print(f"  {'-'*12}  {'-'*4}  {'-'*8}  {'-'*8}  {'-'*7}")
+    for ctype in TYPES:
+        sub = stats[stats["ctype"] == ctype]
+        t   = sub[sub["is_treated"] == 1]["post_promo_visit"].mean()
+        c   = sub[sub["is_treated"] == 0]["post_promo_visit"].mean()
+        lft = t - c if not (pd.isna(t) or pd.isna(c)) else float("nan")
+        print(f"  {ctype:12s}  {len(sub):>4}  {t:>8.1%}  {c:>8.1%}  {lft:>+7.1%}")
+    print()
 
-    # Product volume (สำหรับ OOS check preview)
-    oos_total = df[df["product_name"] == OOS_PRODUCT]["quantity"].sum()
-    oos_last14 = df[
-        (df["product_name"] == OOS_PRODUCT) &
-        (pd.to_datetime(df["timestamp"]) >= pd.to_datetime(END_DATE) - timedelta(days=14))
-    ]["quantity"].sum()
+    print(f"  Hourly volume (threshold={threshold:.0f}):")
+    for h, v in sorted(hourly.items()):
+        flag = "  ← PEAK" if h in peak_det else ""
+        print(f"    {h:02d}:00  {int(v):5d}{flag}")
+    print(f"  Peak hours detected: {peak_det}")
+    print()
 
-    print(f"\n{'='*60}")
-    print(f"  Synthetic Full-Feature Dataset")
-    print(f"{'='*60}")
-    print(f"  Customers  : {n_cust:,}")
-    print(f"  Transactions: {n_tx:,}")
-    print(f"  Date range : {date_range}")
-    print(f"  Treated    : {treated_pct:.1f}% of customers")
-    print(f"\n  Hourly volume (threshold={thresh:.0f}):")
-    for h, v in hourly.items():
-        flag = " ← PEAK" if h in peak_detected else ""
-        print(f"    {h:02d}:00  {v:5,}{flag}")
-    print(f"\n  Peak hours detected: {peak_detected}")
+    print(f"  OOS product '{OOS_PRODUCT}':")
+    print(f"    initial_est={init_est}, recent_demand(14d)={rec_dem}")
+    print(f"    remaining={remaining}  →  in_stock={in_stock}",
+          "← ✅ OOS triggered" if not in_stock else "← ❌ NOT triggered")
+    print()
 
-    print(f"\n  OOS Product '{OOS_PRODUCT}':")
-    n_days_total = (pd.to_datetime(END_DATE) - pd.to_datetime(START_DATE)).days
-    daily_rate = oos_total / n_days_total
-    initial_est = round(daily_rate * 14 * 1.5)
-    remaining   = max(0, initial_est - oos_last14)
-    threshold_stock = max(5, initial_est * 0.20)
-    in_stock    = remaining > threshold_stock
-    print(f"    total_qty={oos_total}, daily_rate={daily_rate:.1f}")
-    print(f"    initial_est={initial_est}, recent_demand(14d)={oos_last14}")
-    print(f"    remaining={remaining}, threshold={threshold_stock:.0f}")
-    print(f"    in_stock={in_stock}  ← {'✅ OOS triggered' if not in_stock else '⚠️  NOT triggered yet'}")
+    print(f"  Apriori bundle support (min_support={min_sup}):")
+    print(f"    {HERO_A}+{HERO_B}: {ab_sup:.3f}",
+          "✅" if ab_sup > min_sup else "❌")
+    print(f"    {HERO_C}+{HERO_D}: {cd_sup:.3f}",
+          "✅" if cd_sup > min_sup else "❌")
+    print()
 
-    # Bundle check
-    bundled = df[df["product_name"].isin(BUNDLE_A + BUNDLE_B)]
-    print(f"\n  Bundle products ({BUNDLE_A + BUNDLE_B}):")
-    print(f"    transactions: {len(bundled):,} across {bundled['customer_id'].nunique()} customers")
-    print(f"  {'='*58}")
-
-    # ── Save transactions ────────────────────────────────────────────────────
-    os.makedirs("data", exist_ok=True)
-    df.to_csv(OUT_PATH, index=False)
-    print(f"\n  Saved: {OUT_PATH}")
-
-    # ── Save separate labels file (for --promo-response) ────────────────────
-    # aggregate per customer: max(is_treated), mean(post_promo_visit) → binary
-    labels = (
-        df.groupby("customer_id")
-        .agg(
-            is_treated      =("is_treated",       "max"),
-            post_promo_visit=("post_promo_visit",  "mean"),
-            promo_type      =("promo_type",        lambda x: x.mode().iloc[0]),
-        )
-        .reset_index()
-    )
-    median_ppv = labels["post_promo_visit"].median()
-    labels["post_promo_visit"] = (labels["post_promo_visit"] > median_ppv).astype(int)
-    labels.to_csv(LABELS_PATH, index=False)
-    print(f"  Saved: {LABELS_PATH}")
-    print(f"\n  Run pipeline:")
-    print(f"    uv run --with 'pandas,numpy,lightgbm,scikit-learn,mlxtend' \\")
-    print(f"      python3 src/csv_pipeline_engine.py \\")
-    print(f"      {OUT_PATH} \\")
-    print(f"      --promo-response {LABELS_PATH}")
-    print(f"{'='*60}\n")
-
-    return df
+    print("  Saved: data/synthetic_full_features.csv")
+    print("  Saved: data/synthetic_full_features_labels.csv")
+    print()
+    print("  Run pipeline:")
+    print("    uv run --with 'pandas,numpy,lightgbm,scikit-learn,mlxtend' \\")
+    print("      python3 src/csv_pipeline_engine.py \\")
+    print("      data/synthetic_full_features.csv \\")
+    print("      --promo-response data/synthetic_full_features_labels.csv")
+    print("=" * 62)
 
 
+# ── CLI ────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=42)
+    parser = argparse.ArgumentParser(
+        description="Generate ML-valid synthetic retail dataset for demo / paper"
+    )
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
     args = parser.parse_args()
     generate(seed=args.seed)
