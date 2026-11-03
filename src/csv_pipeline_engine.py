@@ -160,8 +160,10 @@ def layer2_csv_mba(df, segments, df_rfm):
 
     basket = df.groupby(["invoice_id", "product_name"])["amount"].count().unstack().fillna(0)
     basket_bool = basket > 0
+    # counts need numbers: the product of two True/False tables only says "together at least once" (1), never how many bills
+    basket_int = basket_bool.astype(int)
 
-    co_matrix = basket_bool.T.dot(basket_bool)
+    co_matrix = basket_int.T.dot(basket_int)
     co_mat_np = co_matrix.to_numpy().copy()
     np.fill_diagonal(co_mat_np, 0)
     co_matrix = pd.DataFrame(co_mat_np, index=co_matrix.index, columns=co_matrix.columns)
@@ -187,7 +189,7 @@ def layer2_csv_mba(df, segments, df_rfm):
         seg_invoices = df.loc[
             df["customer_id"].astype(str).isin(seg_customers), "invoice_id"
         ].unique()
-        seg_basket = basket_bool.loc[basket_bool.index.isin(seg_invoices)]
+        seg_basket = basket_int.loc[basket_int.index.isin(seg_invoices)]
 
         if len(seg_basket) >= 2:
             seg_co = seg_basket.T.dot(seg_basket)
@@ -233,7 +235,7 @@ def layer2_csv_mba(df, segments, df_rfm):
 
         # personal basket: invoices ที่มีมากกว่า 1 product → personal co-occurrence
         cid_invoices = grp["invoice_id"].unique()
-        cid_basket = basket_bool.loc[basket_bool.index.isin(cid_invoices)]
+        cid_basket = basket_int.loc[basket_int.index.isin(cid_invoices)]
         personal_pair_a, personal_pair_b = None, None
         personal_pair_count = 0
         if len(cid_basket) >= 1 and cid_basket.shape[1] >= 2:
