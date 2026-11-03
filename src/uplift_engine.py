@@ -156,19 +156,24 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
     # Miscalibrated P(Y=1) propagates directly to profit estimates via:
     #   baseline_profit = gross_margin * p_baseline
     #   incremental     = gross_margin * (p_treated - p_baseline) - promo_cost
-    # CalibratedClassifierCV(isotonic, cv=3) fits an isotonic regression on OOF predictions
+    # CalibratedClassifierCV(isotonic, cv=N) fits an isotonic regression on OOF predictions
     # to map raw scores → calibrated probabilities. Also used in Stage 2 cross-predictions.
+    # cv is capped so every fold contains at least 1 example of the minority class.
+    _cv_treat = min(5, int(treat_data['converted'].value_counts().min()))
+    _cv_ctrl  = min(5, int(ctrl_data['converted'].value_counts().min()))
+    _cv_treat = max(2, _cv_treat)
+    _cv_ctrl  = max(2, _cv_ctrl)
     mu1 = CalibratedClassifierCV(
         lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
                            reg_lambda=1.0, min_child_samples=20, subsample=0.8,
                            colsample_bytree=0.8, verbose=-1),
-        method='isotonic', cv=5
+        method='isotonic', cv=_cv_treat
     )
     mu0 = CalibratedClassifierCV(
         lgb.LGBMClassifier(n_estimators=n_estimators, random_state=42,
                            reg_lambda=1.0, min_child_samples=20, subsample=0.8,
                            colsample_bytree=0.8, verbose=-1),
-        method='isotonic', cv=5
+        method='isotonic', cv=_cv_ctrl
     )
     mu1.fit(treat_data[features], treat_data['converted'])
     mu0.fit(ctrl_data[features],  ctrl_data['converted'])
@@ -530,6 +535,55 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
     return result
 
 
+# ── Window auto-detection ─────────────────────────────────────────────────────
+
+_MIN_POST_DAYS   = 7    # post-window must have at least this many days for conversion measurement
+_MIN_TOTAL_DAYS  = 30   # warn when total data span is below this
+_DEFAULT_PRE_FRAC = 0.75  # default pre/post split fraction
+
+
+def _auto_window_split(ts: pd.Series) -> tuple:
+    """Choose a time-based pre/post split that guarantees a minimum post-window.
+
+    Unlike quantile(0.75) on transaction timestamps (which measures 75% of
+    *transactions*, not 75% of *time*), this splits on the actual date range so
+    the post-window is predictable in days.
+
+    Auto-adjusts the split fraction when the default 75/25 would leave fewer
+    than _MIN_POST_DAYS days in the post-window:
+      • enough total data  → shift split to guarantee _MIN_POST_DAYS post
+      • very short dataset → 50/50 split (best we can do)
+
+    Returns (split_date, span_days, post_days).
+    """
+    ts_clean = pd.to_datetime(ts, errors="coerce").dropna()
+    t_min, t_max = ts_clean.min(), ts_clean.max()
+    span_days = max(1, (t_max - t_min).days)
+
+    pre_frac = _DEFAULT_PRE_FRAC
+    if span_days * (1 - pre_frac) < _MIN_POST_DAYS:
+        if span_days >= _MIN_POST_DAYS * 2:
+            # Shift split leftward to guarantee minimum post-window
+            pre_frac = (span_days - _MIN_POST_DAYS) / span_days
+        else:
+            pre_frac = 0.5  # very short: 50/50 is the best we can do
+
+    split_date = t_min + pd.Timedelta(days=int(span_days * pre_frac))
+    post_days  = max(1, (t_max - split_date).days)
+    pre_days   = (split_date - t_min).days
+
+    adj_note = (f" (adjusted from {_DEFAULT_PRE_FRAC:.0%}: post-window too short)"
+                if pre_frac != _DEFAULT_PRE_FRAC else "")
+    icon = "⚠️ " if span_days < _MIN_TOTAL_DAYS else "ℹ️ "
+    print(f"{icon} [Window] {span_days}d span ({t_min.date()} → {t_max.date()}) | "
+          f"split: {split_date.date()} | pre: {pre_days}d / post: {post_days}d{adj_note}")
+    if span_days < _MIN_TOTAL_DAYS:
+        print(f"   Short window (<{_MIN_TOTAL_DAYS} days): uplift signal may be weak — "
+              f"consider collecting more history before retraining")
+
+    return split_date, span_days, post_days
+
+
 @dataclass
 class Layer4Context:
     """Everything Layer 4 derives from one shop's CSV before any model is fitted or applied."""
@@ -594,7 +648,7 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
         # fallback สำหรับลูกค้าที่ไม่มีใน real_labels:
         # ใช้ temporal split แทน RFM proxy (ป้องกัน leakage)
         _ts = pd.to_datetime(raw_df['timestamp'], errors='coerce')
-        _split = _ts.quantile(0.75)
+        _split, _, _ = _auto_window_split(_ts)
         _post_custs = set(raw_df.loc[_ts > _split, 'customer_id'].unique())
         raw_df['_temporal_conv'] = raw_df['customer_id'].isin(_post_custs).astype(int)
         # ลูกค้าที่ไม่อยู่ใน real_labels → ถือเป็น control (ไม่มีข้อมูลว่าถูก treat)
@@ -637,7 +691,7 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
         print("ℹ️  [Layer 4] Natural-experiment proxy (ไม่พบ real promo labels) — peak-day as treatment")
 
         _ts = pd.to_datetime(raw_df['timestamp'], errors='coerce')
-        _split_date = _ts.quantile(0.75)
+        _split_date, _span_days, _post_days = _auto_window_split(_ts)
 
         _pre  = raw_df[_ts <= _split_date].groupby('customer_id')['total_price'].count().rename('n_pre')
         _post = raw_df[_ts >  _split_date].groupby('customer_id')['total_price'].count().rename('n_post')
