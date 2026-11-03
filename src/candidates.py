@@ -49,6 +49,67 @@ def _uplift_metrics_for_holdout(model, ctx, holdout_ids: set) -> dict:
         return {"error": str(exc)}
 
 
+def _pooled_uplift_metrics(model, pooled) -> dict:
+    """Pool uplift metrics across all stores' holdout sets (P2 #7: multi-store accuracy).
+
+    Concatenates X, T, Y from every store's holdout before calling compute_uplift_metrics,
+    so Qini/AUUC reflect the full held-out population rather than just the first store.
+    """
+    all_X, all_T, all_Y, n_stores = [], [], [], 0
+    for s, ctx in pooled.contexts.items():
+        ids = pooled.holdout_ids[s]
+        hc  = ctx.cust_agg[ctx.cust_agg["customer_id"].astype(str).isin(ids)]
+        if len(hc) < 5 or "was_treated" not in hc.columns or "converted" not in hc.columns:
+            continue
+        all_X.append(hc[ctx.features].fillna(0).values)
+        all_T.append(hc["was_treated"].fillna(0).values)
+        all_Y.append(hc["converted"].fillna(0).values)
+        n_stores += 1
+    if not all_X:
+        return {"error": "no holdout data with labels across any store"}
+    X = np.vstack(all_X)
+    T = np.concatenate(all_T)
+    Y = np.concatenate(all_Y)
+    try:
+        result = compute_uplift_metrics(model, X, T, Y)
+        if n_stores > 1:
+            result["note"] = f"pooled across {n_stores} stores"
+        return result
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _pooled_shap(model, pooled) -> dict:
+    """Pool SHAP across all stores' holdout sets."""
+    try:
+        import shap
+    except ImportError:
+        return {"error": "shap not installed"}
+    try:
+        tau0 = getattr(model, "tau0", None)
+        if tau0 is None:
+            return {"error": "model has no tau0 (not an XLearnerModel)"}
+        all_X, features = [], None
+        for s, ctx in pooled.contexts.items():
+            ids = pooled.holdout_ids[s]
+            hc  = ctx.cust_agg[ctx.cust_agg["customer_id"].astype(str).isin(ids)]
+            if len(hc) < 5:
+                continue
+            all_X.append(hc[ctx.features].fillna(0))
+            features = ctx.features
+        if not all_X or features is None:
+            return {"error": "no holdout data for SHAP"}
+        X_pool    = pd.concat(all_X, ignore_index=True)
+        explainer = shap.TreeExplainer(tau0)
+        shap_vals = explainer.shap_values(X_pool)
+        mean_abs  = np.abs(shap_vals).mean(axis=0)
+        importance = dict(zip(features, mean_abs.tolist()))
+        top5 = dict(sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:5])
+        return {k: round(v, 6) for k, v in top5.items()}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def _shap_importance(model, ctx, holdout_ids: set) -> dict:
     """Top-5 feature importances from SHAP on the CATE regressors (tau0/tau1).
 
@@ -103,56 +164,19 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
                          challenger_m["do_nothing_pct"], is_rec, current_avg)
     holdout_size = sum(s["holdout_customers"] for s in stores)
 
-    # Uplift quality metrics (AUUC, Qini, ECE) — pooled across all stores
-    uplift_m = {}
+    # Uplift quality + SHAP — pooled across ALL stores (P2 #7)
     if pooled.label_mode == "real":
-        # Only meaningful with real labels; proxy mode has random treatment → Qini ≈ 0 by design
-        all_ctx_items = list(pooled.contexts.items())
-        if len(all_ctx_items) == 1:
-            s, ctx = all_ctx_items[0]
-            uplift_m = _uplift_metrics_for_holdout(challenger, ctx, pooled.holdout_ids[s])
-        else:
-            # Multi-store: compute on first store with enough holdout
-            for s, ctx in all_ctx_items:
-                if len(pooled.holdout_ids[s]) >= 30:
-                    uplift_m = _uplift_metrics_for_holdout(challenger, ctx, pooled.holdout_ids[s])
-                    uplift_m["note"] = f"computed on store {s!r} (first store with ≥30 holdout customers)"
-                    break
+        uplift_m       = _pooled_uplift_metrics(challenger, pooled)
+        champion_uplift_m = _pooled_uplift_metrics(champion, pooled) if champion is not None else {}
+        shap_importance = _pooled_shap(challenger, pooled)
     else:
-        uplift_m = {"note": "proxy mode — Qini≈0 by design (random treatment assignment); skipped"}
+        uplift_m          = {"note": "proxy mode — Qini≈0 by design (random treatment assignment); skipped"}
+        champion_uplift_m = {}
+        shap_importance   = {}
 
     challenger_m["uplift_metrics"] = uplift_m
-
-    # Also snapshot champion uplift metrics on the same holdout (for manifest comparison)
-    champion_uplift_m = {}
-    if champion is not None and pooled.label_mode == "real":
-        all_ctx_items = list(pooled.contexts.items())
-        if len(all_ctx_items) == 1:
-            s, ctx = all_ctx_items[0]
-            try:
-                champion_uplift_m = _uplift_metrics_for_holdout(champion, ctx, pooled.holdout_ids[s])
-            except Exception as exc:
-                champion_uplift_m = {"error": str(exc)}
-        else:
-            for s, ctx in all_ctx_items:
-                if len(pooled.holdout_ids[s]) >= 30:
-                    try:
-                        champion_uplift_m = _uplift_metrics_for_holdout(champion, ctx, pooled.holdout_ids[s])
-                        champion_uplift_m["note"] = f"computed on store {s!r} (first store with ≥30 holdout customers)"
-                    except Exception as exc:
-                        champion_uplift_m = {"error": str(exc)}
-                    break
     if champion_m is not None:
         champion_m["uplift_metrics"] = champion_uplift_m
-
-    # SHAP feature importance for CATE (tau0 regressor)
-    shap_importance: dict = {}
-    if pooled.label_mode == "real":
-        all_ctx_items = list(pooled.contexts.items())
-        for s, ctx in all_ctx_items:
-            if len(pooled.holdout_ids[s]) >= 10:
-                shap_importance = _shap_importance(challenger, ctx, pooled.holdout_ids[s])
-                break
     challenger_m["shap_importance"] = shap_importance
 
     return {
@@ -218,6 +242,24 @@ def check_token(models_root: str, candidate_id: str, token: str) -> bool:
 def candidate_model_bytes(models_root: str, candidate_id: str) -> bytes:
     with open(os.path.join(_dir(models_root, candidate_id), "model.pkl"), "rb") as f:
         return f.read()
+
+
+def list_pending_candidates(models_root: str) -> list[dict]:
+    """Return all pending candidates sorted newest-first."""
+    cands_dir = os.path.join(models_root, "candidates")
+    if not os.path.isdir(cands_dir):
+        return []
+    result = []
+    for name in sorted(os.listdir(cands_dir), reverse=True):
+        if not CANDIDATE_ID_RE.fullmatch(name):
+            continue
+        try:
+            cand = load_candidate(models_root, name)
+            if cand["status"]["status"] == "pending":
+                result.append({"candidate_id": name, **cand})
+        except Exception:
+            continue
+    return result
 
 
 def mark_candidate(models_root: str, candidate_id: str, status: str, approver: str) -> None:

@@ -6,7 +6,7 @@ from sklearn.calibration import CalibratedClassifierCV
 import json
 import pickle
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
@@ -951,6 +951,53 @@ def run_layer4(pos_file_path="data/transactions.csv",
                 print(f"   ℹ️  [Retrain] {w}")
     except Exception as _e:
         log("L4", "retrain_trigger_error", error=str(_e), level="WARN")
+
+    # ── P2 #5: Shadow mode — score latest pending candidate without affecting decisions ──
+    try:
+        from candidates import list_pending_candidates, candidate_model_bytes as _cand_bytes
+        _root = models_root or os.path.dirname(REGISTRY_PATH)
+        pending = list_pending_candidates(_root)
+        if pending:
+            _cid     = pending[0]["candidate_id"]
+            _shadow  = pickle.loads(_cand_bytes(_root, _cid))
+            _s_feats = getattr(_shadow, "feature_names_", ctx.features)
+            if list(_s_feats) == list(ctx.features):
+                _, _sd = decide_for_customers(_shadow, ctx)
+                _s_profit = float(_sd["expected_profit"].sum())
+                _c_profit = float(detail["expected_profit"].sum())
+                _diff_pct = round((_s_profit - _c_profit) / abs(_c_profit) * 100, 2) if _c_profit else None
+                _shadow_rpt = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "champion_version":      ref.version,
+                    "shadow_candidate":      _cid,
+                    "champion_send_rate_pct": round(float(detail["should_send"].mean() * 100), 2),
+                    "shadow_send_rate_pct":   round(float(_sd["should_send"].mean() * 100), 2),
+                    "champion_profit":        round(_c_profit, 2),
+                    "shadow_profit":          round(_s_profit, 2),
+                    "profit_diff_pct":        _diff_pct,
+                }
+                atomic_write_text("data/processed/shadow_report.json",
+                                  json.dumps(_shadow_rpt, indent=2, ensure_ascii=False))
+                _diff_str = f"{_diff_pct:+.1f}%" if _diff_pct is not None else "N/A"
+                print(f"\n👥 [Shadow] Candidate {_cid}: "
+                      f"send={_shadow_rpt['shadow_send_rate_pct']:.1f}%  "
+                      f"profit={_s_profit:,.2f}  (vs champion: {_diff_str})")
+                log("L4", "shadow_run", **_shadow_rpt)
+            else:
+                print(f"\n👥 [Shadow] Candidate {_cid} skipped — feature mismatch")
+    except Exception as _e:
+        log("L4", "shadow_run_error", error=str(_e), level="WARN")
+
+    # ── P2 #8: Business metric monitoring ─────────────────────────────────────
+    try:
+        from business_monitor import record_snapshot
+        snap = record_snapshot(detail, ref.version)
+        print(f"📊 [Monitor] send={snap.get('send_rate_pct','?')}%  "
+              f"avg_profit={snap.get('avg_expected_profit','?')}  "
+              f"do_nothing={snap.get('do_nothing_pct','?')}%  "
+              f"[history → data/processed/business_metrics_history.csv]")
+    except Exception as _e:
+        log("L4", "business_monitor_error", error=str(_e), level="WARN")
 
     keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
                  'guardrail_blocked', 'should_send', 'send_window']
