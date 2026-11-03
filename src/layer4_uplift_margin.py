@@ -367,9 +367,14 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
             total_spend      =('total_price',      'sum'),
             n_transactions   =('transaction_id',   'count'),
         ).reset_index()
-        # แปลง conversion rate → binary: > median rate = converted
-        median_conv = cust['converted'].median()  # full population, not treated-only
-        cust['converted'] = (cust['converted'] > median_conv).astype(int)
+        # แปลง conversion rate → binary. ถ้าเป็น 0/1 อยู่แล้ว (label ต่อลูกค้า) ใช้ตามนั้น: กฎ "> median" จะลบ label ทิ้งทั้งหมด
+        # เมื่อคนกลับมาซื้อเกินครึ่ง (median = 1 ไม่มีใครสูงกว่า 1) ส่วนอัตราที่เป็นเศษส่วน: > median rate = converted
+        rates = cust['converted']
+        if rates.isin([0, 1]).all():
+            cust['converted'] = rates.astype(int)
+        else:
+            median_conv = rates.median()  # full population, not treated-only
+            cust['converted'] = (rates > median_conv).astype(int)
         cust['income'] = 0.0   # ไม่มี income ใน raw_pos
 
         # เพิ่ม promo_type dummies เป็น features เพิ่มเติม
