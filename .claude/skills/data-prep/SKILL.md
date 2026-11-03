@@ -13,6 +13,61 @@ This skill guides analysis and preparation of POS transaction data for two purpo
 2. **Serving / Testing** — scoring existing customers with the current champion
 
 The pipeline accepts two input formats:
+
+---
+
+## Bootstrap Strategy: Training When You Have No Real Data Yet
+
+**The core problem:** To train a good uplift model you need real customer data, but to serve real customers you need a trained model first.
+
+### Three stages of data maturity
+
+**Stage 1 — No real data (new deployment)**
+
+Use a synthetic dataset that matches the shop's domain:
+- Price range in the shop's actual currency/scale
+- Product categories that cover ≥ 3 distinct groups (for bundle analysis)
+- Timestamps spanning ≥ 90 days (for RFM and peak detection)
+- Simulated is_treated / post_promo_visit with realistic control ratio (20–40%)
+
+The model will be approximate but functional. Use proxy mode for serving until real data accumulates.
+
+> The `dessert-ml.csv` dataset is an example of a well-designed Stage 1 synthetic dataset — it was deliberately built to exercise all 6 pipeline layers. **It is not a substitute for real data** but allows full pipeline testing and a baseline champion before launch.
+
+**Stage 2 — Have transaction history, no campaign labels (3–6 months)**
+
+Use real POS transactions in proxy mode:
+```bash
+python src/train_champion.py \
+  --store-data myshop:data/real_transactions.csv \
+  --baseline-data data/real_transactions.csv
+```
+No labels file needed. The pipeline derives proxy treatment (peak-day buyers) and conversion (returned in last 25% of window) automatically.
+
+The model learns **real price distributions, real customer frequency patterns, real peak hours** — the most impactful calibration gains come from this stage.
+
+**Stage 3 — Have real campaign response data (6+ months)**
+
+Track which customers received promotions and whether they returned:
+```bash
+python src/train_champion.py \
+  --store-data myshop:data/transactions.csv:data/campaign_labels.csv \
+  --baseline-data data/transactions.csv
+```
+This enables real causal uplift estimation. The DQ gate will validate control ratio and ATE direction before allowing promotion to champion.
+
+### What each layer needs from training data
+
+| Layer | Minimum requirement | Fails if missing |
+|-------|--------------------|--------------------|
+| Layer 1 (RFM / K-Means) | ≥ 50 customers, ≥ 2 visits each | All customers cluster into 1 group |
+| Layer 2 (Bundles / MBA) | ≥ 3 product categories, ≥ 100 bills | No association rules found (fallback to default bundle) |
+| Layer 3 (Peak hours) | ≥ 14 days of timestamps | Peak = hour 0 (flat distribution, no signal) |
+| Layer 4 (Uplift) | ≥ 100 customers, ≥ 10% control ratio | Proxy fallback; X-learner degrades to T-learner |
+
+A synthetic dataset used for Stage 1 must cover **all four layers** or the pipeline will produce degraded output on some layers while appearing to work on others.
+
+---
 - **POS transactions** (raw format, proxy labels derived automatically)
 - **POS transactions + labels file** (real treatment/conversion labels)
 
