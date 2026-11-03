@@ -1,0 +1,148 @@
+{
+  "current": "v4",
+  "versions": [
+    {
+      "version": "v1",
+      "sha256": "73ee5ec0d6551d11d186f0fd5c3012578e83ebafb80591581b34f94bf9cd28e6",
+      "created_at": null,
+      "approved_by": null,
+      "approved_at": null,
+      "provenance": "simulated",
+      "metrics": null,
+      "legacy": true
+    },
+    {
+      "version": "v2",
+      "sha256": "fba1fd7f859bbad57c6ba4f1be1ecd68b325f0e2ea3a977798cf57c69e5e26ca",
+      "created_at": "2026-11-03T13:28:24.266309+00:00",
+      "approved_by": "patcharapol (สั่งผ่าน Claude) - ข้อมูลจำลอง dessert v2",
+      "approved_at": "2026-11-03T13:29:22.046429+00:00",
+      "provenance": "real-labels",
+      "metrics": {
+        "challenger": {
+          "profit": 11368.69,
+          "send_count": 78,
+          "blocked_count": 104,
+          "do_nothing_pct": 83.81742738589212,
+          "uplift_metrics": {
+            "n_holdout": 482,
+            "n_treated": 344,
+            "n_control": 138,
+            "ate_pred": 0.0448,
+            "ate_actual": 0.0344,
+            "ate_bias": 0.0103,
+            "qini": -0.6295,
+            "auuc": -0.0386,
+            "baseline_ece": 0.1836,
+            "interpretation": "weak/no signal — model performs near random"
+          },
+          "shap_importance": {
+            "error": "shap not installed"
+          }
+        },
+        "champion": {
+          "profit": 10599.74,
+          "send_count": 33,
+          "blocked_count": 47,
+          "do_nothing_pct": 93.15352697095436,
+          "uplift_metrics": {
+            "n_holdout": 482,
+            "n_treated": 344,
+            "n_control": 138,
+            "ate_pred": -0.1413,
+            "ate_actual": 0.0344,
+            "ate_bias": -0.1757,
+            "qini": -2.5829,
+            "auuc": 0.0634,
+            "baseline_ece": 0.3829,
+            "interpretation": "weak/no signal — model performs near random"
+          }
+        }
+      },
+      "legacy": false
+    },
+    {
+      "version": "v3",
+      "sha256": "f892d97926f43a86da04651569765c67645e11f67aa3088be0622e8e60a4a810",
+      "created_at": "2026-11-03T14:33:39.278183+00:00",
+      "approved_by": "patcharapol (สั่งผ่าน Claude) - ข้อมูลจำลอง dessert v3",
+      "approved_at": "2026-11-03T14:34:35.354305+00:00",
+      "provenance": "real-labels",
+      "metrics": {
+        "challenger": {
+          "profit": 11722.39,
+          "send_count": 105,
+          "blocked_count": 0,
+          "do_nothing_pct": 78.26086956521739,
+          "uplift_metrics": {
+            "n_holdout": 483,
+            "n_treated": 345,
+            "n_control": 138,
+            "ate_pred": 0.1042,
+            "ate_actual": 0.087,
+            "ate_bias": 0.0172,
+            "qini": 0.8118,
+            "auuc": 0.0879,
+            "baseline_ece": 0.1175,
+            "interpretation": "excellent uplift model"
+          },
+          "shap_importance": {
+            "error": "shap not installed"
+          }
+        },
+        "champion": {
+          "profit": 11467.429999999998,
+          "send_count": 138,
+          "blocked_count": 0,
+          "do_nothing_pct": 71.42857142857143,
+          "uplift_metrics": {
+            "n_holdout": 483,
+            "n_treated": 345,
+            "n_control": 138,
+            "ate_pred": 0.0891,
+            "ate_actual": 0.087,
+            "ate_bias": 0.0021,
+            "qini": 0.3437,
+            "auuc": 0.0773,
+            "baseline_ece": 0.138,
+            "interpretation": "excellent uplift model"
+          }
+        }
+      },
+      "legacy": false
+    },
+    {
+      "version": "v4",
+      "sha256": "4a5daa61a204baa1af355448356fbdc181c4f2ac4923b00a327ad8926279ea54",
+      "created_at": "2026-11-03T16:07:31.700343+00:00",
+      "approved_by": "patcharapol (สั่งผ่าน Claude) - ข้อมูลจำลอง dessert v4",
+      "approved_at": "2026-11-03T16:08:15.820823+00:00",
+      "provenance": "real-labels",
+      "metrics": {
+        "challenger": {
+          "profit": 11464.77,
+          "send_count": 105,
+          "blocked_count": 0,
+          "do_nothing_pct": 78.26086956521739,
+          "uplift_metrics": {
+            "n_holdout": 483,
+            "n_treated": 345,
+            "n_control": 138,
+            "ate_pred": 0.0942,
+            "ate_actual": 0.087,
+            "ate_bias": 0.0073,
+            "qini": 0.8561,
+            "auuc": 0.1082,
+            "baseline_ece": 0.1296,
+            "interpretation": "excellent uplift model"
+          },
+          "shap_importance": {
+            "error": "shap not installed"
+          }
+        },
+        "champion": null
+      },
+      "legacy": false
+    }
+  ]
+}
