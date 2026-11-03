@@ -37,3 +37,10 @@ def test_fractions_between_0_and_1_keep_the_median_rule(tmp_path):
     per_customer = [[0, 0, 0, 0], [1, 0, 0, 0], [1, 1, 0, 0], [1, 1, 1, 0], [1, 1, 1, 1]]
     out = _load_real_labels(_pos(tmp_path, per_customer)).sort_values("customer_id")
     assert out["converted"].tolist() == [0, 0, 0, 1, 1]
+
+
+def test_one_customer_without_any_visit_value_does_not_bring_back_the_median_rule(tmp_path):
+    # a customer whose post_promo_visit cells are all blank has a NaN rate; the other 99 are 0/1 and must stay as they are
+    path = _pos(tmp_path, [[1, 1]] * 70 + [[0, 0]] * 29 + [[None, None]])
+    out = _load_real_labels(path)
+    assert int(out["converted"].sum()) == 70
