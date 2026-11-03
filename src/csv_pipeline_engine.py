@@ -11,6 +11,7 @@ from sklearn.metrics import silhouette_score
 from layer5_llm_summarizer import generate_campaign_action_plan
 from business_config import CONFIG
 from pipeline_logger import log
+from crm_export import export_customer_segments_safe, export_segments_safe
 
 # ==========================================
 # Layer 0: CSV Data Loader & Preprocessing
@@ -502,6 +503,7 @@ if __name__ == "__main__":
         _t0 = time.monotonic()
         _rows_in = int(df_rfm["customer_id"].nunique())
         segments, df_rfm = layer2_csv_mba(df_raw, segments, df_rfm)
+        export_customer_segments_safe(df_rfm, segments)  # customer -> segment, for the CRM API
         log("L2", "layer_complete", duration_ms=round((time.monotonic() - _t0) * 1000),
             rows_in=_rows_in, rows_out=len(segments))
 
@@ -546,6 +548,7 @@ if __name__ == "__main__":
             suppressed_count=int((layer4_df["should_send"] == 0).sum()) if layer4_df is not None else 0)
 
         validated_payload = merge_layer4_into_payload(validated_payload, layer4_df, df_rfm)
+        export_segments_safe(validated_payload)  # for the CRM API; never aborts the pipeline
 
         print("\n🤖 [Layer 5] ส่งข้อมูลให้ Local LLM สร้าง Action Plan...")
         print("\n" + "="*50)

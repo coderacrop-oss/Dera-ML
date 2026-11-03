@@ -28,6 +28,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,16 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+from atomic_io import atomic_write_text  # noqa: E402,F401  (re-exported)
+from business_config import CONFIG  # noqa: E402
+from peak_hours import (DEFAULT_OFF_PEAK, DEFAULT_PEAK, FILENAME, derive_from_timestamps,  # noqa: E402
+                        load_peak_hours)
+
+
+def stable_hash(s: str) -> int:
+    """Process-independent non-negative hash (Python's hash() is salted per run)."""
+    return int.from_bytes(hashlib.sha256(s.encode("utf-8")).digest()[:8], "big")
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -210,11 +221,11 @@ def build_schedule(
 
         candidate_weeks = wave_week_map.get(wave, [weeks[1]])
         # Pick week based on customer_id hash → consistent, spreadable
-        cid_hash = abs(hash(str(row["customer_id"]))) % len(candidate_weeks)
+        cid_hash = stable_hash(str(row["customer_id"])) % len(candidate_weeks)
         week_days = candidate_weeks[cid_hash]
 
         # Pick day within the week based on hash
-        day_idx = abs(hash(str(row["customer_id"]) + "day")) % len(week_days)
+        day_idx = stable_hash(str(row["customer_id"]) + "day") % len(week_days)
         send_day = week_days[day_idx]
         send_dt = send_day.replace(hour=hour, minute=0, second=0)
         send_datetimes.append(send_dt)
@@ -276,6 +287,35 @@ def build_schedule(
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
+def detect_hours(processed_dir: str = "data/processed") -> tuple[list[int], list[int], str]:
+    """(peak_hours, off_peak_hours, source). Layer 3 is the single source of truth:
+    1. layer3_peak_hours.json (written by Layer 3);
+    2. else recompute from layer3_context_flags.csv with Layer 3's rule and timezone (Asia/Bangkok);
+    3. else built-in defaults."""
+    saved = load_peak_hours(processed_dir)
+    if saved:
+        return saved["peak_hours"], saved["off_peak_hours"], FILENAME
+    ctx_path = os.path.join(processed_dir, "layer3_context_flags.csv")
+    if os.path.exists(ctx_path):
+        peak, off_peak = derive_from_timestamps(pd.read_csv(ctx_path)["timestamp"], CONFIG["business_tz"])
+        return peak, off_peak, "layer3_context_flags.csv"
+    return list(DEFAULT_PEAK), list(DEFAULT_OFF_PEAK), "defaults"
+
+
+def snapshot_segments(out_dir: str, month: str) -> str | None:
+    """Copy segments_latest.json (written by the pipeline) to segments_<month>.json.
+
+    Returns the new path, or None when the pipeline has not produced segments_latest.json.
+    """
+    src = os.path.join(out_dir, "segments_latest.json")
+    if not os.path.exists(src):
+        return None
+    dst = os.path.join(out_dir, f"segments_{month}.json")
+    with open(src, encoding="utf-8") as f:
+        atomic_write_text(dst, f.read())
+    return dst
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monthly campaign scheduler from broadcast_list.csv")
     parser.add_argument("--broadcast",    default="data/processed/broadcast_list.csv")
@@ -299,24 +339,11 @@ def main():
             next_month = datetime(today.year, today.month + 1, 1)
         args.month = next_month.strftime("%Y-%m")
 
-    # ── Auto-detect peak hours from layer3_context_flags.csv ──────────────
+    # ── Peak hours: use what Layer 3 computed (see detect_hours) ──────────
     if args.peak_hours is None:
-        ctx_path = "data/processed/layer3_context_flags.csv"
-        if os.path.exists(ctx_path):
-            ctx = pd.read_csv(ctx_path)
-            ctx["timestamp"] = pd.to_datetime(ctx["timestamp"], utc=True, errors="coerce")
-            ctx = ctx.dropna(subset=["timestamp"])
-            # Use UTC hour directly — avoid tz conversion artifacts from Bangkok offset
-            hourly = ctx["timestamp"].dt.tz_localize(None).dt.hour.value_counts()
-            thresh = hourly.mean() + 0.5 * hourly.std()
-            peak_hours   = sorted(hourly[hourly >  thresh].index.tolist())
-            off_peak_hours = sorted(hourly[hourly <= thresh].index.tolist())
-            print(f"ℹ️  Auto-detected peak hours from layer3: {peak_hours}")
-            print(f"ℹ️  Off-peak hours: {off_peak_hours}")
-        else:
-            peak_hours   = [11, 12, 13, 14, 15]
-            off_peak_hours = [8, 9, 10, 16, 17, 18]
-            print(f"ℹ️  layer3_context_flags.csv not found — using defaults: peak={peak_hours}")
+        peak_hours, off_peak_hours, source = detect_hours("data/processed")
+        print(f"ℹ️  Peak hours ({source}): {peak_hours}")
+        print(f"ℹ️  Off-peak hours: {off_peak_hours}")
     else:
         peak_hours     = [int(h) for h in args.peak_hours.split(",")]
         off_peak_hours = ([int(h) for h in args.off_peak_hours.split(",")]
@@ -340,10 +367,10 @@ def main():
     holdout_path  = os.path.join(args.out_dir, f"ab_holdout_{args.month}.csv")
     summary_path  = os.path.join(args.out_dir, f"campaign_summary_{args.month}.json")
 
-    schedule_df.to_csv(schedule_path, index=False)
-    holdout_df.to_csv(holdout_path, index=False)
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    atomic_write_text(schedule_path, schedule_df.to_csv(index=False))
+    atomic_write_text(holdout_path, holdout_df.to_csv(index=False))
+    atomic_write_text(summary_path, json.dumps(summary, ensure_ascii=False, indent=2))
+    snapshot_segments(args.out_dir, args.month)
 
     # ── Print summary ──────────────────────────────────────────────────────
     print(f"\n{'='*60}")

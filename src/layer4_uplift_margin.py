@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG, REGISTRY_PATH
+from peak_hours import write_peak_hours
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +226,7 @@ def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
     std_vol  = hourly_counts.std()
     peak_threshold = mean_vol + 0.5 * std_vol
     peak_hours_data = set(hourly_counts[hourly_counts > peak_threshold].index.tolist())
+    data_driven = len(peak_hours_data) > 0
 
     # Fallback to config if data has no spread (e.g. all same hour)
     if len(peak_hours_data) == 0:
@@ -232,6 +234,9 @@ def run_layer3(pos_file_path="data/raw_pos_transactions.csv"):
         print(f"ℹ️  [Layer 3] Peak hours: config fallback {sorted(peak_hours_data)}")
     else:
         print(f"ℹ️  [Layer 3] Peak hours (data-driven, threshold={peak_threshold:.0f} txns): {sorted(peak_hours_data)}")
+    # Persist the result so downstream steps (campaign_scheduler, CRM API) reuse it instead of recomputing.
+    write_peak_hours(peak_hours_data, set(hourly_counts.index.tolist()) - peak_hours_data, biz_tz,
+                     peak_threshold if data_driven else None, "data" if data_driven else "config_fallback")
 
     df['time_context'] = df['timestamp'].dt.hour.apply(
         lambda h: 'Peak' if h in peak_hours_data else 'Off-Peak'
@@ -378,9 +383,14 @@ def _load_real_labels(promo_path: str) -> pd.DataFrame | None:
             total_spend      =('total_price',      'sum'),
             n_transactions   =('transaction_id',   'count'),
         ).reset_index()
-        # แปลง conversion rate → binary: > median rate = converted
-        median_conv = cust['converted'].median()  # full population, not treated-only
-        cust['converted'] = (cust['converted'] > median_conv).astype(int)
+        # แปลง conversion rate → binary. ถ้าเป็น 0/1 อยู่แล้ว (label ต่อลูกค้า) ใช้ตามนั้น: กฎ "> median" จะลบ label ทิ้งทั้งหมด
+        # เมื่อคนกลับมาซื้อเกินครึ่ง (median = 1 ไม่มีใครสูงกว่า 1) ส่วนอัตราที่เป็นเศษส่วน: > median rate = converted
+        rates = cust['converted']
+        if rates.dropna().isin([0, 1]).all():  # NaN = ลูกค้าที่ไม่มีค่าเลย ไม่ควรทำให้ทั้งไฟล์กลับไปใช้กฎ median
+            cust['converted'] = rates.fillna(0).astype(int)
+        else:
+            median_conv = rates.median()  # full population, not treated-only
+            cust['converted'] = (rates > median_conv).astype(int)
         cust['income'] = 0.0   # ไม่มี income ใน raw_pos
 
         # เพิ่ม promo_type dummies เป็น features เพิ่มเติม
