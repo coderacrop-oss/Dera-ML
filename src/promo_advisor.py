@@ -127,29 +127,52 @@ def _promo_profit_per_customer(
     Returns (viable, expected_profit, promo_cost) for the operator promo
     applied to this customer.
 
-    Formula mirrors _viable() in uplift_engine:
-      promo_cost  = avg_spent * discount_rate
-      gross_rev   = avg_spent * (1 - cogs_rate)
-      net_margin  = (gross_rev - promo_cost) / avg_spent
-      incremental = gross_rev * uplift_score - promo_cost
-      viable      = net_margin >= min_margin AND incremental > 0
+    Formula:
+      gross_margin = avg_spent * (1 - cogs_rate)         ← always full basket
+      cost_basis   = avg_top_category_spent               if scope="category" matches
+                   = avg_spent                            otherwise
+      promo_cost   = cost_basis * discount_rate           ← discounted items only
+      net_margin   = (gross_margin - promo_cost) / avg_spent
+      incremental  = gross_margin * uplift_score - promo_cost   ← returned as profit
+      viable       = net_margin >= min_margin AND incremental > 0
+
+    gross_margin uses the full basket (a promo visit generates full-basket revenue).
+    promo_cost uses only the category spend so scoped promos are not blocked by
+    overestimated cost from unrelated categories.
+    Returns incremental profit (not total projected value).
     """
     avg_spent = float(row.get("avg_spent", 0.0))
     if avg_spent <= 0:
         return False, 0.0, 0.0
 
-    uplift    = float(row.get("uplift_score", row.get("predicted_uplift", 0.0)))
-    p_control = float(row.get("prob_control", 0.5))
-    gross_margin = avg_spent * (1.0 - cogs_rate)
+    # gross_margin always uses full avg_spent — if the promo drives a visit,
+    # the customer buys their normal basket, not just the discounted category.
+    # promo_cost uses only the category's avg spend when scope="category",
+    # because the discount is applied to those items only.
+    # This prevents scoped promos from being blocked by overestimated cost.
+    if spec.scope == "category" and spec.category:
+        cat_spent = float(row.get("avg_top_category_spent", 0.0))
+        top_cat   = str(row.get("top_category", "")).lower().strip()
+        cost_basis = (
+            cat_spent
+            if cat_spent > 0 and top_cat == spec.category.lower().strip()
+            else avg_spent  # fallback: category data unavailable
+        )
+    else:
+        cost_basis = avg_spent
 
-    promo_cost   = round(avg_spent * spec.discount_rate, 2)
-    gross_rev    = gross_margin
-    net_margin   = (gross_rev - promo_cost) / avg_spent if avg_spent > 0 else 0.0
-    incremental  = round(gross_margin * uplift - promo_cost, 2)
+    uplift       = float(row.get("uplift_score", row.get("predicted_uplift", 0.0)))
+    gross_margin = avg_spent * (1.0 - cogs_rate)        # full basket margin
+
+    promo_cost  = round(cost_basis * spec.discount_rate, 2)   # discounted items only
+    net_margin  = (gross_margin - promo_cost) / avg_spent if avg_spent > 0 else 0.0
+    incremental = round(gross_margin * uplift - promo_cost, 2)
 
     viable = (net_margin >= min_margin) and (incremental > 0)
-    profit = round(gross_margin * (p_control + uplift) - promo_cost, 2)
-    return viable, profit, promo_cost
+    # Return incremental profit only (comparable to ML's expected_profit)
+    # = additional gross margin from uplift minus promo cost
+    # Does NOT include baseline conversion (prob_control) to avoid overstating ROI
+    return viable, incremental, promo_cost
 
 
 def evaluate_operator_promo(

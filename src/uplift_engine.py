@@ -865,6 +865,32 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
     )
     cust_agg['top_product'] = cust_agg['customer_id'].map(top_product_map).fillna('')
 
+    # ── Per-customer top category + avg spend in that category ───────────────
+    # Used by promo_advisor when scope="category" to avoid overestimating
+    # promo_cost on customers who buy across multiple categories.
+    if 'category' in raw_df.columns:
+        _cat_total = (
+            raw_df.groupby(['customer_id', 'category'])['total_price']
+            .sum().reset_index()
+            .sort_values('total_price', ascending=False)
+            .drop_duplicates('customer_id')
+        )
+        top_category_map = _cat_total.set_index('customer_id')['category']
+        cust_agg['top_category'] = cust_agg['customer_id'].map(top_category_map).fillna('')
+
+        # avg line-item spend within that top category (consistent with avg_spent)
+        _top_cat_per_cust = top_category_map.reset_index()
+        _top_cat_per_cust.columns = ['customer_id', 'top_cat']
+        _cat_rows = raw_df.merge(_top_cat_per_cust, on='customer_id', how='left')
+        _cat_rows = _cat_rows[_cat_rows['category'] == _cat_rows['top_cat']]
+        avg_top_cat_map = _cat_rows.groupby('customer_id')['total_price'].mean().round(2)
+        cust_agg['avg_top_category_spent'] = (
+            cust_agg['customer_id'].map(avg_top_cat_map).fillna(0.0)
+        )
+    else:
+        cust_agg['top_category']           = ''
+        cust_agg['avg_top_category_spent'] = 0.0
+
     # ── Frequency trend: buying more or less recently? ───────────────────────
     # Split window at midpoint; freq_trend = recent_half_count - early_half_count.
     # Positive = rising (buying more often recently), Negative = declining.
