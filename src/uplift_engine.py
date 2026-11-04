@@ -125,6 +125,84 @@ class MultiTreatmentUpliftModel:
         return getattr(first, 'feature_names_', None)
 
 
+class PooledMultiTreatmentModel:
+    """Single X-learner trained with treatment arm as one-hot features (pooled learning).
+
+    Pooled learning advantages over one-vs-rest (MultiTreatmentUpliftModel):
+      - Shares signal across arms: customers responsive to arm A likely share
+        characteristics with those responsive to arm B → lower variance.
+      - Single model → faster serving, single set of hyperparameters.
+      - Works well when individual arms are sparse (< 5K observations each).
+
+    Training: see train_hillstrom.py
+    Arm features are added internally at inference — the serving pipeline only
+    passes base features (without arm columns) to predict_uplift / predict_control_proba.
+
+    Attribute
+    ---------
+    feature_names_   list of BASE feature names (no arm features) — set by _with_names().
+    """
+
+    def __init__(self, base_model, treatment_arms: list, arm_feature_prefix: str = "arm_"):
+        self.base_model          = base_model       # XLearnerModel trained with arm features
+        self.treatment_arms      = list(treatment_arms)
+        self.arm_feature_prefix  = arm_feature_prefix
+        self.feature_names_      = None             # set by _with_names() after init
+
+    def _add_arm_features(self, X, arm: str | None):
+        """Return DataFrame copy of X with arm one-hot features appended.
+
+        arm=None → all arm features set to 0 (control / no treatment).
+        """
+        import pandas as pd
+        if not isinstance(X, pd.DataFrame):
+            cols = self.feature_names_ or [f"f{i}" for i in range(X.shape[1])]
+            X = pd.DataFrame(X, columns=cols)
+        else:
+            X = X.copy()
+        for a in self.treatment_arms:
+            col = f"{self.arm_feature_prefix}{a}"
+            X[col] = 1.0 if (arm is not None and a == arm) else 0.0
+        return X
+
+    def _all_model_features(self) -> list:
+        """Full feature list including arm columns (matches base_model training)."""
+        arm_cols = [f"{self.arm_feature_prefix}{a}" for a in self.treatment_arms]
+        base = list(self.feature_names_) if self.feature_names_ else []
+        return base + arm_cols
+
+    def predict_all_cates(self, X) -> dict:
+        """Return {arm_name: cate_array} for every treatment arm."""
+        return {
+            arm: self.base_model.predict_uplift(self._add_arm_features(X, arm))
+            for arm in self.treatment_arms
+        }
+
+    def predict_best_treatment(self, X) -> tuple:
+        """Return (best_arm_array, best_cate_array) per customer."""
+        import numpy as np
+        all_cates = self.predict_all_cates(X)
+        types  = list(all_cates.keys())
+        matrix = np.column_stack([all_cates[t] for t in types])  # (n, k)
+        best_idx       = matrix.argmax(axis=1)
+        best_treatment = np.array([types[i] for i in best_idx])
+        best_cate      = matrix[np.arange(len(best_idx)), best_idx]
+        return best_treatment, best_cate
+
+    def predict_uplift(self, X):
+        """Return best CATE across arms — compatible with single-treatment serving pipeline."""
+        _, best_cate = self.predict_best_treatment(X)
+        return best_cate
+
+    def predict_control_proba(self, X):
+        """P(Y=1 | X, no treatment) — arm features set to 0."""
+        return self.base_model.predict_control_proba(self._add_arm_features(X, arm=None))
+
+    @property
+    def n_features_(self):
+        return len(self.feature_names_) if self.feature_names_ else self.base_model.n_features_
+
+
 def _with_names(model, features):
     """Remember the exact feature list/order the model was fitted on (serving verifies it)."""
     model.feature_names_ = list(features)
@@ -807,6 +885,19 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
     print(f"💡 [Layer 4] Per-product COGS: {n_matched:,}/{len(cust_agg):,} customers matched "
           f"(fallback={_default_cogs:.1%})")
 
+    # ── CLV estimation (BG/NBD) ──────────────────────────────────────────────
+    try:
+        from clv_model import estimate_clv_for_customers
+        cust_agg = estimate_clv_for_customers(
+            raw_df, cust_agg,
+            cogs_rate=_default_cogs,
+            horizon_days=CONFIG.get("clv_horizon_days", 90),
+        )
+    except Exception as _clv_exc:
+        print(f"⚠️  [CLV] skipped ({_clv_exc})")
+        for _col in ("p_alive", "expected_txns", "clv_estimate", "clv_at_risk"):
+            cust_agg[_col] = 0.0
+
     return Layer4Context(raw_df=raw_df, cust_agg=cust_agg, features=features, rfm_df=rfm_df,
                          context_df=context_df, top_bundle_name=top_bundle_name,
                          product_cogs=_product_cogs, default_cogs=_default_cogs,
@@ -854,6 +945,7 @@ def build_action_menu(
     cluster_segment_name: str = "",
     bundle_name: str = "",
     rescue: bool = False,
+    clv_at_risk: float = 0.0,
 ) -> tuple[str, float, str]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
@@ -885,7 +977,7 @@ def build_action_menu(
     p_treated       = max(0.0, min(1.0, prob_control + uplift))
     baseline_profit = round(gross_margin * p_baseline, 2)
 
-    def _viable(rate_key: str) -> tuple[bool, float]:
+    def _viable(rate_key: str) -> tuple[bool, float, float]:
         cost_rate   = PROMO_COST_RATES[rate_key]
         promo_cost  = avg_spent * cost_rate
         gross_rev   = avg_spent * (1 - CONFIG["default_discount_rate"])
@@ -893,15 +985,25 @@ def build_action_menu(
         net_margin  = net_profit / gross_rev if gross_rev > 0 else 0
         incremental = gross_margin * (p_treated - p_baseline) - promo_cost
         profit      = round(gross_margin * p_treated - promo_cost, 2)
-        return (net_margin >= MIN_MARGIN and incremental > 0), profit
+        return (net_margin >= MIN_MARGIN and incremental > 0), profit, round(promo_cost, 2)
 
-    def _viable_loyalty(rate_key: str) -> tuple[bool, float]:
+    def _viable_loyalty(rate_key: str) -> tuple[bool, float, float]:
         """Sure Things convert regardless — don't require incremental > 0.
         Only check that the promo cost doesn't eliminate baseline profit."""
         cost_rate  = PROMO_COST_RATES[rate_key]
         promo_cost = avg_spent * cost_rate
         profit     = round(gross_margin * p_baseline - promo_cost, 2)
-        return profit > 0, profit
+        return profit > 0, profit, round(promo_cost, 2)
+
+    def _viable_clv(rate_key: str) -> tuple[bool, float, float]:
+        """Rescue tiers: justified when promo_cost ≤ CLV-at-risk AND baseline profitable.
+        Falls back to _viable_loyalty when no CLV data available (clv_at_risk <= 0)."""
+        if clv_at_risk <= 0:
+            return _viable_loyalty(rate_key)
+        cost_rate  = PROMO_COST_RATES[rate_key]
+        promo_cost = avg_spent * cost_rate
+        profit     = round(gross_margin * p_baseline - promo_cost, 2)
+        return (promo_cost <= clv_at_risk and profit > 0), profit, round(promo_cost, 2)
 
     tier = cluster_tier(cluster_segment_name)
 
@@ -909,28 +1011,28 @@ def build_action_menu(
     if group == "sure_thing":
         for rule in SURE_THING_RULES:
             if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
-                ok, profit = _viable_loyalty(rule["rate_key"])
+                ok, profit, promo_cost = _viable_loyalty(rule["rate_key"])
                 if ok:
                     action = rule["action"].format(bundle=bundle_name)
-                    return action, profit, send_window
-        return "", baseline_profit, time_context
+                    return action, profit, promo_cost, send_window
+        return "", baseline_profit, 0.0, time_context
 
     # ── Persuadables: collect all viable, return max profit ──────────────────
     # rescue=True (churn_risk / cant_lose / hibernating / about_to_sleep with mildly negative
-    # uplift): goal is relationship retention, not incremental conversion — use loyalty check.
-    viable_fn = _viable_loyalty if rescue else _viable
-    candidates: list[tuple[str, float, str]] = []
+    # uplift): goal is relationship retention — use CLV-informed viability check.
+    viable_fn = _viable_clv if rescue else _viable
+    candidates: list[tuple[str, float, float, str]] = []
     for rule in PERSUADABLE_RULES:
         if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
-            ok, profit = viable_fn(rule["rate_key"])
+            ok, profit, promo_cost = viable_fn(rule["rate_key"])
             if ok:
                 action = rule["action"].format(bundle=bundle_name)
-                candidates.append((action, profit, send_window))
+                candidates.append((action, profit, promo_cost, send_window))
 
     if candidates:
         return max(candidates, key=lambda x: x[1])
 
-    return "", baseline_profit, time_context
+    return "", baseline_profit, 0.0, time_context
 
 
 def decide_for_customers(model, ctx, customer_ids=None):
@@ -1045,6 +1147,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
         top_prod        = row.get('top_product', '')
         cluster_bundle  = row.get('cluster_bundle', top_bundle_name)
         cluster_segment = row.get('cluster_segment', '')
+        clv_at_risk     = float(row.get('clv_at_risk', 0.0))
         cogs            = _product_cogs.get(top_prod, _default_cogs)
         gross_margin    = avg_spent * (1 - cogs)
         p_baseline      = max(0.0, prob_c)
@@ -1052,14 +1155,12 @@ def decide_for_customers(model, ctx, customer_ids=None):
 
         # ── Step 1: Hard stops ────────────────────────────────────────────────
         if pd.isna(in_stock) or not in_stock:
-            return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
+            return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context, 0.0])
         if avg_spent < low_basket:
             from action_rules import cluster_tier as _cluster_tier
             tier = _cluster_tier(cluster_segment)
 
             if tier == "champions":
-                # Champions ที่ basket เล็ก = มาบ่อยแต่ใช้น้อยต่อครั้ง
-                # → Milestone Reward จูงใจให้โตตะกร้าแทน Do Nothing
                 m_basket = CONFIG["milestone_basket"]
                 m_pts    = CONFIG["milestone_points"]
                 m_margin = m_basket * (1 - cogs)
@@ -1069,84 +1170,71 @@ def decide_for_customers(model, ctx, customer_ids=None):
                     m_profit = round(m_margin * p_mile - m_cost, 2)
                     return pd.Series([
                         f"Milestone Reward: สั่งครบ {m_basket:.0f} บาท รับ {m_pts} แต้ม",
-                        m_profit, 0, time_context
+                        m_profit, 0, time_context, round(m_cost, 2)
                     ])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
             elif tier == "new_customer":
-                # New Customer ที่ basket เล็ก = เพิ่งเริ่มต้น ไม่ใช่ไม่ valuable
-                # → Welcome offer เพื่อดึง 2nd visit — ใช้ loyalty check ไม่ใช่ incremental
                 w_cost   = avg_spent * CONFIG["promo_cost_rates"]["new_customer_welcome"]
                 w_profit = round(gross_margin * p_baseline - w_cost, 2)
                 if w_profit > 0:
-                    return pd.Series(["Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, 0, time_context])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                    return pd.Series(["Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, 0, time_context, round(w_cost, 2)])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
             elif tier == "about_to_sleep":
-                # About to Sleep ที่ basket เล็ก = กำลังจะหายไป ต้องกระตุ้นก่อนสายเกิน
-                # → Re-engage nudge — ใช้ loyalty check ไม่ใช่ incremental
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["standard"]
                 r_profit = round(gross_margin * p_baseline - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, 0, time_context])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                    return pd.Series(["เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, 0, time_context, round(r_cost, 2)])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
             elif tier == "hibernating":
-                # Hibernating ที่ basket เล็ก = ไม่มาแล้ว + ใช้น้อย
-                # → Reactivation nudge เบาๆ — ใช้ loyalty check เพื่อเชิญกลับ
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
                 r_profit = round(gross_margin * p_baseline - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, 0, time_context])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                    return pd.Series(["Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, 0, time_context, round(r_cost, 2)])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
             elif tier in ("churn_risk", "cant_lose"):
-                # Rescue tiers ที่ basket เล็ก — Early win-back ก่อนสูญเสียลูกค้า
-                # → ใช้ loyalty check เพราะ cost ของการสูญเสียลูกค้า > cost ของโปรโมชั่น
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["churn_rescue"]
                 r_profit = round(gross_margin * p_baseline - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, 0, time_context])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                    return pd.Series(["Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, 0, time_context, round(r_cost, 2)])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
             else:
-                # Mid / At-Risk ที่ basket เล็ก → Bundle Upsell หรือ Do Nothing (เดิม)
                 bundle_basket = avg_spent * 1.8
                 bundle_margin = bundle_basket * (1 - cogs)
                 bundle_cost   = bundle_basket * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
                 p_upsell      = max(0.0, min(1.0, prob_c + uplift * 0.4))
                 if bundle_margin * (p_upsell - p_baseline) - bundle_cost > 0 and cluster_bundle and not cluster_bundle.startswith("เซตคู่คุ้มค่า"):
                     upsell_profit = round(bundle_margin * p_upsell - bundle_cost, 2)
-                    return pd.Series([f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, 0, time_context])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+                    return pd.Series([f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, 0, time_context, round(bundle_cost, 2)])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
 
         # ── Step 1: Uplift group classification ───────────────────────────────
         from action_rules import cluster_tier as _cluster_tier
         tier = _cluster_tier(cluster_segment)
         group = classify_uplift_group(uplift, prob_c)
-        rescue = False   # True → build_action_menu uses loyalty check instead of incremental
+        rescue = False
         if group == "do_not_disturb":
             _rescue_tiers = {"churn_risk", "cant_lose", "hibernating"}
             _rescue_guard = CONFIG.get("rescue_uplift_guard", -0.10)
             if tier in _rescue_tiers and uplift >= _rescue_guard:
-                # Rescue tiers: cost of losing customer > cost of mildly negative uplift
                 group = "persuadable"
                 rescue = True
             elif tier in ("new_customer", "potential_loyalist") and prob_c >= CONFIG["sure_thing_prob_threshold"]:
-                # New Customer / Potential Loyalist ที่ prob_control สูง = convert เองอยู่แล้ว
-                # → welcome / habit-building loyalty action, ไม่ใช่สัญญาณอันตราย
                 group = "sure_thing"
             elif tier == "about_to_sleep" and uplift >= _rescue_guard:
-                # About to Sleep ที่ drift เบาๆ → ส่งก่อนสูญเสีย
                 group = "persuadable"
                 rescue = True
             else:
-                return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context, 0.0])
         if group == "lost_cause":
-            return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context])
+            return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context, 0.0])
 
         # ── Step 2: Action menu (pre-validated profitable actions only) ───────
-        action, profit, send_window = build_action_menu(
+        action, profit, promo_cost, send_window = build_action_menu(
             group=group, avg_spent=avg_spent, cogs=cogs,
             uplift=uplift, prob_control=prob_c,
             rfm_seg=rfm_seg, is_spike=is_spike,
@@ -1157,30 +1245,26 @@ def decide_for_customers(model, ctx, customer_ids=None):
             cluster_segment_name=cluster_segment,
             bundle_name=cluster_bundle,
             rescue=rescue,
+            clv_at_risk=clv_at_risk,
         )
 
         if not action:
-            # Zero-cost notification: high-value customers (rfm >= threshold) who convert
-            # on their own but no promo is profitable at current AOV.
-            # Send a relationship message with zero promo cost — doesn't hurt margin,
-            # reinforces loyalty without discounting.
-            # Guard: uplift must not be strongly negative (>= rescue_guard) so we're not
-            # sending to customers who actively dislike outreach.
             _zc_rfm = CONFIG.get("zero_cost_rfm_threshold", 7)
             _rescue_guard = CONFIG.get("rescue_uplift_guard", -0.10)
             _zc_tiers = {"champions", "loyal", "cant_lose", "potential_loyalist"}
             if rfm_seg >= _zc_rfm and tier in _zc_tiers and uplift >= _rescue_guard:
                 return pd.Series(["Zero-Cost: เราคิดถึงคุณ — ขอบคุณที่เป็นลูกค้าที่ดีของเรา",
-                                   baseline_profit, 0, time_context])
-            return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0, time_context])
+                                   baseline_profit, 0, time_context, 0.0])
+            return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0, time_context, 0.0])
 
-        return pd.Series([action, profit, 0, send_window])
+        return pd.Series([action, profit, 0, send_window, promo_cost])
 
     res = temp_df.apply(calculate_action_and_profit, axis=1)
     temp_df['recommended_action'] = res[0]
     temp_df['expected_profit']    = res[1]
     temp_df['guardrail_blocked']  = res[2]
     temp_df['send_window']        = res[3]
+    temp_df['promo_cost']         = res[4]
     temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
     temp_df['should_send'] = (
         (temp_df['guardrail_blocked'] == 0) &
