@@ -1,6 +1,6 @@
 # CRM Campaign API
 
-Read-only REST API over the files the Campaign Engine writes in `data/processed/`.
+REST API over the files the Campaign Engine writes in `data/processed/`. Read-only, except `/v1/runs` (below), which lets a client post transactions and have the pipeline run on them.
 Design: `docs/superpowers/specs/2026-11-03-crm-api-design.md`.
 
 ## Run
@@ -64,3 +64,18 @@ curl "localhost:8000/v1/plans/2026-12/calendar.ics?token=$CRM_API_CALENDAR_TOKEN
 ## Tests
 `pytest` from the repo root. `tests/crm_api/test_contract_vs_pipeline_output.py` compares the API with
 the real files in `data/processed/` and is skipped when none exist.
+
+## Runs: send transactions, get a plan (`/v1/runs`)
+A CRM can post its own transactions instead of running the pipeline by hand. One run at a time; the pipeline works in a temporary
+directory and **only a successful run replaces files in `CRM_API_DATA_DIR`** (file by file with an atomic rename, a month's summary last).
+A failed run leaves the published plan as it was.
+
+| Request | Answer |
+|---|---|
+| `POST /v1/runs` `{"csv": "<text>", "month": "2026-12", "holdout_rate": 0.05}` (X-API-Key; csv up to 20 MB) | `202 {"run_id", "status"}`; `409 run_in_progress`; `413 csv_too_large`; `422` for a bad month / rate / empty csv |
+| `GET /v1/runs/{run_id}` | `{"status": "queued\|running\|succeeded\|failed", "step", "started_at", "finished_at", "label_mode", "error": {"code"} \| null}` |
+| `GET /v1/runs/latest/layers` | Layers 1-4 of the latest successful run in the shape of DERA AI's `plans/<month>/analysis` (`label_mode`, `layer1..4`, `warnings`, `notes`); `404 no_run` before the first one |
+
+The csv has the columns the pipeline reads (`customer_id`, `timestamp`, `transaction_id`, `product_name`, `quantity`, `unit_price`, `total_price`;
+add `is_treated` and `post_promo_visit` when there is promo history, otherwise the engine estimates the effect: `label_mode: proxy`).
+The run uses the champion in `models/registry` and does not train. The error of a failed run is only a code (`engine_failed`), never a path or a customer id.

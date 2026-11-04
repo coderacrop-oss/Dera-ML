@@ -6,18 +6,20 @@ from . import docs
 from .auth import require_key
 from .errors import install_handlers
 from .loaders import list_months
-from . import catalog, ics, models, plans, segmentation
+from . import catalog, ics, models, plans, runs, segmentation
 from .settings import Settings
 
 
 ERRORS = {code: {"description": text} for code, text in docs.ERRORS_TH.items()}
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, run_engine: runs.Engine | None = None,
+               max_csv_bytes: int = runs.DEFAULT_MAX_CSV_BYTES) -> FastAPI:
     settings = settings or Settings.from_env()
     app = FastAPI(title=docs.APP_TITLE, version="1.0.0", description=docs.APP_DESCRIPTION,
                   openapi_tags=docs.TAGS)
     app.state.settings = settings
+    app.state.runs = runs.RunManager(settings, run_engine or runs.subprocess_engine, max_csv_bytes)
     install_handlers(app)
 
     @app.get("/health", **docs.HEALTH)
@@ -28,7 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def months():
         return {"months": list_months(settings.data_dir)}
 
-    for r in (plans.router, catalog.router, segmentation.router):
+    for r in (plans.router, catalog.router, segmentation.router, runs.router):
         app.include_router(r, prefix="/v1", dependencies=[Depends(require_key)], responses=ERRORS)
     app.include_router(ics.router, prefix="/v1", responses=ERRORS)  # own auth: key OR calendar token
     app.include_router(models.router, prefix="/v1")  # operator tool: own auth (per-candidate token), hidden from the contract
