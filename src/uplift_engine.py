@@ -807,6 +807,19 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
     print(f"💡 [Layer 4] Per-product COGS: {n_matched:,}/{len(cust_agg):,} customers matched "
           f"(fallback={_default_cogs:.1%})")
 
+    # ── CLV estimation (BG/NBD) ──────────────────────────────────────────────
+    try:
+        from clv_model import estimate_clv_for_customers
+        cust_agg = estimate_clv_for_customers(
+            raw_df, cust_agg,
+            cogs_rate=_default_cogs,
+            horizon_days=CONFIG.get("clv_horizon_days", 90),
+        )
+    except Exception as _clv_exc:
+        print(f"⚠️  [CLV] skipped ({_clv_exc})")
+        for _col in ("p_alive", "expected_txns", "clv_estimate", "clv_at_risk"):
+            cust_agg[_col] = 0.0
+
     return Layer4Context(raw_df=raw_df, cust_agg=cust_agg, features=features, rfm_df=rfm_df,
                          context_df=context_df, top_bundle_name=top_bundle_name,
                          product_cogs=_product_cogs, default_cogs=_default_cogs,
@@ -854,6 +867,7 @@ def build_action_menu(
     cluster_segment_name: str = "",
     bundle_name: str = "",
     rescue: bool = False,
+    clv_at_risk: float = 0.0,
 ) -> tuple[str, float, str]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
@@ -903,6 +917,16 @@ def build_action_menu(
         profit     = round(gross_margin * p_baseline - promo_cost, 2)
         return profit > 0, profit, round(promo_cost, 2)
 
+    def _viable_clv(rate_key: str) -> tuple[bool, float, float]:
+        """Rescue tiers: justified when promo_cost ≤ CLV-at-risk AND baseline profitable.
+        Falls back to _viable_loyalty when no CLV data available (clv_at_risk <= 0)."""
+        if clv_at_risk <= 0:
+            return _viable_loyalty(rate_key)
+        cost_rate  = PROMO_COST_RATES[rate_key]
+        promo_cost = avg_spent * cost_rate
+        profit     = round(gross_margin * p_baseline - promo_cost, 2)
+        return (promo_cost <= clv_at_risk and profit > 0), profit, round(promo_cost, 2)
+
     tier = cluster_tier(cluster_segment_name)
 
     # ── Sure Things: first viable rule wins ──────────────────────────────────
@@ -917,8 +941,8 @@ def build_action_menu(
 
     # ── Persuadables: collect all viable, return max profit ──────────────────
     # rescue=True (churn_risk / cant_lose / hibernating / about_to_sleep with mildly negative
-    # uplift): goal is relationship retention, not incremental conversion — use loyalty check.
-    viable_fn = _viable_loyalty if rescue else _viable
+    # uplift): goal is relationship retention — use CLV-informed viability check.
+    viable_fn = _viable_clv if rescue else _viable
     candidates: list[tuple[str, float, float, str]] = []
     for rule in PERSUADABLE_RULES:
         if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
@@ -1045,6 +1069,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
         top_prod        = row.get('top_product', '')
         cluster_bundle  = row.get('cluster_bundle', top_bundle_name)
         cluster_segment = row.get('cluster_segment', '')
+        clv_at_risk     = float(row.get('clv_at_risk', 0.0))
         cogs            = _product_cogs.get(top_prod, _default_cogs)
         gross_margin    = avg_spent * (1 - cogs)
         p_baseline      = max(0.0, prob_c)
@@ -1142,6 +1167,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
             cluster_segment_name=cluster_segment,
             bundle_name=cluster_bundle,
             rescue=rescue,
+            clv_at_risk=clv_at_risk,
         )
 
         if not action:
