@@ -1,0 +1,301 @@
+customer_id,segment,true_baseline_conv,avg_spent_ground_truth,total_txns,total_spend,avg_spend,times_treated,times_converted,promo_types_received
+cust-0000,cant_lose,0.65,364.94,32,12738,176.91666666666666,1,1,"['notification', 'discount', 'points_vip']"
+cust-0001,hibernating,0.08,86.9,3,761,126.83333333333333,0,0,[]
+cust-0002,about_to_sleep,0.28,99.92,6,1412,117.66666666666667,1,0,"['retention', 'points_vip']"
+cust-0003,new_customer,0.25,105.34,11,3429,127.0,1,1,"['notification', 'discount', 'retention', 'points_vip']"
+cust-0004,loyal,0.6,367.72,21,8405,195.46511627906978,1,1,"['points_vip', 'retention']"
+cust-0005,lost_cause,0.05,10.0,5,1632,163.2,0,0,[]
+cust-0006,cant_lose,0.65,371.58,21,8245,191.74418604651163,1,1,"['notification', 'points_vip']"
+cust-0007,cant_lose,0.65,421.18,25,10739,198.87037037037038,1,1,"['retention', 'points_vip']"
+cust-0008,loyal,0.6,273.68,15,3778,134.92857142857142,1,1,"['retention', 'discount']"
+cust-0009,hibernating,0.08,78.84,3,1842,368.4,0,0,[]
+cust-0010,at_risk,0.22,49.73,7,3956,247.25,1,1,['discount']
+cust-0011,lost_cause,0.05,78.2,6,1934,148.76923076923077,1,0,['points_vip']
+cust-0012,new_customer,0.25,160.46,5,2378,264.22222222222223,0,0,[]
+cust-0013,about_to_sleep,0.28,48.65,12,4306,179.41666666666666,1,0,"['points_vip', 'discount', 'retention']"
+cust-0014,hibernating,0.08,115.91,1,79,79.0,1,0,['retention']
+cust-0015,potential_loyalist,0.35,133.57,12,4287,178.625,1,1,"['points_vip', 'discount', 'retention']"
+cust-0016,promising,0.3,127.24,12,4800,200.0,1,1,"['discount', 'points_vip', 'retention']"
+cust-0017,champions,0.72,244.71,44,16269,193.67857142857142,1,1,"['discount', 'points_vip']"
+cust-0018,about_to_sleep,0.28,96.62,3,1842,204.66666666666666,1,1,['points_vip']
+cust-0019,new_customer,0.25,145.5,8,4143,207.15,1,0,"['points_vip', 'notification']"
+cust-0020,cant_lose,0.65,469.92,19,5173,156.75757575757575,1,1,"['points_vip', 'notification', 'discount']"
+cust-0021,at_risk,0.22,189.29,15,6002,206.9655172413793,1,1,"['points_vip', 'discount', 'notification']"
+cust-0022,lost_cause,0.05,99.44,6,2123,265.375,1,0,['points_vip']
+cust-0023,about_to_sleep,0.28,127.56,6,1523,152.3,1,0,"['points_vip', 'retention']"
+cust-0024,cant_lose,0.65,609.27,31,12554,187.37313432835822,1,1,"['notification', 'retention']"
+cust-0025,potential_loyalist,0.35,171.95,12,2785,132.61904761904762,1,1,"['notification', 'points_vip', 'discount']"
+cust-0026,hibernating,0.08,114.84,4,1342,149.11111111111111,1,1,"['points_vip', 'retention']"
+cust-0027,champions,0.72,320.34,30,8985,154.91379310344828,1,1,"['retention', 'points_vip']"
+cust-0028,loyal,0.6,255.32,18,6060,144.28571428571428,1,1,"['retention', 'discount']"
+cust-0029,new_customer,0.25,75.59,5,3390,282.5,1,1,"['retention', 'points_vip']"
+cust-0030,cant_lose,0.65,518.75,34,10543,162.2,1,1,"['retention', 'points_vip', 'discount']"
+cust-0031,lost_cause,0.05,40.54,6,2266,226.6,1,0,"['notification', 'discount']"
+cust-0032,at_risk,0.22,151.29,7,2602,153.05882352941177,1,0,['notification']
+cust-0033,at_risk,0.22,112.37,10,4421,184.20833333333334,1,0,"['notification', 'points_vip']"
+cust-0034,hibernating,0.08,125.14,3,1064,152.0,1,1,['discount']
+cust-0035,potential_loyalist,0.35,187.54,14,6023,215.10714285714286,1,0,['retention']
+cust-0036,loyal,0.6,395.65,20,7237,164.47727272727272,1,1,"['discount', 'retention', 'points_vip']"
+cust-0037,hibernating,0.08,111.92,1,453,151.0,1,0,['notification']
+cust-0038,potential_loyalist,0.35,71.4,12,5250,187.5,1,1,"['retention', 'points_vip']"
+cust-0039,new_customer,0.25,97.66,14,6172,228.59259259259258,1,0,"['discount', 'points_vip', 'notification']"
+cust-0040,hibernating,0.08,54.84,8,4196,220.8421052631579,1,0,"['retention', 'points_vip', 'notification']"
+cust-0041,about_to_sleep,0.28,89.27,7,1452,132.0,1,0,['retention']
+cust-0042,new_customer,0.25,152.89,6,2961,227.76923076923077,1,1,"['points_vip', 'retention']"
+cust-0043,at_risk,0.22,145.5,7,2971,185.6875,0,0,[]
+cust-0044,about_to_sleep,0.28,82.04,6,3488,290.6666666666667,1,0,"['retention', 'points_vip']"
+cust-0045,about_to_sleep,0.28,69.45,7,1825,121.66666666666667,1,0,['retention']
+cust-0046,at_risk,0.22,121.31,4,572,81.71428571428571,1,0,"['points_vip', 'retention']"
+cust-0047,potential_loyalist,0.35,89.17,7,4125,275.0,1,1,"['notification', 'discount', 'points_vip']"
+cust-0048,new_customer,0.25,76.51,5,1926,192.6,1,1,"['points_vip', 'notification']"
+cust-0049,loyal,0.6,274.96,16,4338,144.6,1,1,"['points_vip', 'discount', 'retention']"
+cust-0050,potential_loyalist,0.35,207.77,7,3336,256.61538461538464,1,1,['points_vip']
+cust-0051,champions,0.72,410.88,25,9411,192.0612244897959,1,1,"['notification', 'discount']"
+cust-0052,cant_lose,0.65,125.05,30,8768,146.13333333333333,1,1,['points_vip']
+cust-0053,new_customer,0.25,110.65,10,2005,125.3125,1,1,"['discount', 'points_vip', 'notification']"
+cust-0054,new_customer,0.25,102.52,7,1263,140.33333333333334,0,0,[]
+cust-0055,cant_lose,0.65,449.67,26,9373,170.4181818181818,1,1,"['retention', 'discount', 'points_vip', 'notification']"
+cust-0056,hibernating,0.08,138.49,4,1795,199.44444444444446,1,0,['points_vip']
+cust-0057,promising,0.3,37.15,12,3329,158.52380952380952,1,1,"['discount', 'notification', 'points_vip']"
+cust-0058,loyal,0.6,202.71,24,11145,192.1551724137931,1,0,['retention']
+cust-0059,loyal,0.6,297.27,16,6394,188.05882352941177,1,1,"['discount', 'points_vip']"
+cust-0060,new_customer,0.25,44.64,3,975,139.28571428571428,1,1,"['discount', 'retention']"
+cust-0061,hibernating,0.08,134.28,6,2201,183.41666666666666,0,0,[]
+cust-0062,promising,0.3,146.58,10,3616,190.31578947368422,1,0,"['notification', 'retention', 'points_vip']"
+cust-0063,cant_lose,0.65,501.59,27,12574,193.44615384615383,1,1,"['discount', 'points_vip']"
+cust-0064,new_customer,0.25,80.02,3,1086,217.2,1,1,"['discount', 'notification', 'points_vip']"
+cust-0065,promising,0.3,166.62,8,4118,257.375,1,1,"['discount', 'notification']"
+cust-0066,promising,0.3,178.08,12,4915,223.4090909090909,1,1,"['notification', 'retention', 'points_vip']"
+cust-0067,at_risk,0.22,129.32,3,1213,151.625,1,0,"['notification', 'points_vip']"
+cust-0068,champions,0.72,373.44,32,8670,146.94915254237287,1,1,"['retention', 'points_vip']"
+cust-0069,hibernating,0.08,98.11,4,1422,158.0,1,0,"['points_vip', 'discount']"
+cust-0070,potential_loyalist,0.35,106.83,8,2991,230.07692307692307,1,0,['discount']
+cust-0071,hibernating,0.08,85.57,8,2856,219.69230769230768,1,1,"['points_vip', 'discount', 'notification']"
+cust-0072,about_to_sleep,0.28,103.9,8,2382,170.14285714285714,1,1,"['points_vip', 'discount']"
+cust-0073,potential_loyalist,0.35,169.17,16,5563,198.67857142857142,1,1,"['notification', 'retention', 'points_vip']"
+cust-0074,champions,0.72,449.98,28,12063,201.05,1,1,"['points_vip', 'discount', 'notification']"
+cust-0075,potential_loyalist,0.35,97.07,16,5154,156.1818181818182,1,1,"['discount', 'retention']"
+cust-0076,potential_loyalist,0.35,143.75,12,5908,256.8695652173913,1,1,"['discount', 'retention', 'points_vip']"
+cust-0077,new_customer,0.25,151.85,9,4272,224.8421052631579,1,0,"['points_vip', 'notification', 'discount']"
+cust-0078,promising,0.3,96.54,9,2271,126.16666666666667,1,1,"['notification', 'discount', 'retention']"
+cust-0079,cant_lose,0.65,301.33,29,11434,211.74074074074073,1,1,"['points_vip', 'retention']"
+cust-0080,new_customer,0.25,107.08,8,3784,189.2,1,1,"['retention', 'discount']"
+cust-0081,hibernating,0.08,115.33,3,965,160.83333333333334,1,0,"['points_vip', 'notification']"
+cust-0082,about_to_sleep,0.28,110.46,8,1892,118.25,1,1,['notification']
+cust-0083,loyal,0.6,356.32,19,8649,240.25,1,1,"['discount', 'points_vip']"
+cust-0084,champions,0.72,435.68,26,8959,186.64583333333334,1,1,"['discount', 'points_vip']"
+cust-0085,loyal,0.6,317.35,19,7805,169.67391304347825,1,1,['discount']
+cust-0086,cant_lose,0.65,466.49,25,9103,185.77551020408163,1,1,"['retention', 'points_vip']"
+cust-0087,hibernating,0.08,159.83,3,1085,217.0,1,1,['discount']
+cust-0088,loyal,0.6,233.59,18,5690,142.25,1,1,"['retention', 'points_vip']"
+cust-0089,promising,0.3,39.84,16,6710,248.5185185185185,1,1,"['retention', 'points_vip']"
+cust-0090,loyal,0.6,378.34,17,5925,174.26470588235293,1,1,"['points_vip', 'retention', 'notification']"
+cust-0091,new_customer,0.25,83.98,6,2015,201.5,1,1,"['retention', 'points_vip']"
+cust-0092,hibernating,0.08,93.24,6,1865,143.46153846153845,1,0,"['points_vip', 'retention']"
+cust-0093,at_risk,0.22,172.38,4,1411,156.77777777777777,1,0,"['points_vip', 'discount', 'retention']"
+cust-0094,at_risk,0.22,55.91,7,2996,166.44444444444446,1,0,"['discount', 'points_vip']"
+cust-0095,new_customer,0.25,56.19,8,3198,199.875,0,0,[]
+cust-0096,at_risk,0.22,55.95,6,1794,149.5,1,1,"['discount', 'points_vip', 'notification']"
+cust-0097,loyal,0.6,186.47,12,4238,192.63636363636363,1,0,['points_vip']
+cust-0098,loyal,0.6,285.17,15,5945,198.16666666666666,1,1,"['retention', 'points_vip']"
+cust-0099,lost_cause,0.05,83.1,8,1897,135.5,1,0,"['points_vip', 'retention']"
+cust-0100,lost_cause,0.05,76.91,4,1685,210.625,1,0,"['points_vip', 'notification']"
+cust-0101,new_customer,0.25,50.55,5,1291,117.36363636363636,1,0,"['retention', 'discount']"
+cust-0102,potential_loyalist,0.35,34.49,11,4207,200.33333333333334,1,1,"['notification', 'discount', 'points_vip']"
+cust-0103,lost_cause,0.05,71.36,3,1241,177.28571428571428,1,0,['discount']
+cust-0104,cant_lose,0.65,343.39,31,11108,201.96363636363637,1,1,"['points_vip', 'retention']"
+cust-0105,new_customer,0.25,116.08,5,1092,121.33333333333333,1,1,['points_vip']
+cust-0106,hibernating,0.08,111.06,5,1643,182.55555555555554,1,0,"['retention', 'points_vip']"
+cust-0107,potential_loyalist,0.35,156.91,17,5388,168.375,1,1,"['notification', 'discount', 'points_vip']"
+cust-0108,loyal,0.6,310.81,19,7991,215.97297297297297,1,1,"['discount', 'points_vip']"
+cust-0109,lost_cause,0.05,75.73,5,1529,152.9,1,0,"['discount', 'notification']"
+cust-0110,hibernating,0.08,105.9,5,1416,157.33333333333334,1,0,['points_vip']
+cust-0111,potential_loyalist,0.35,114.77,12,4192,199.61904761904762,1,1,"['retention', 'discount']"
+cust-0112,at_risk,0.22,112.82,7,2683,223.58333333333334,1,1,['retention']
+cust-0113,promising,0.3,138.85,15,6148,212.0,1,1,"['discount', 'points_vip']"
+cust-0114,loyal,0.6,315.64,15,4238,151.35714285714286,1,1,"['retention', 'points_vip', 'discount']"
+cust-0115,about_to_sleep,0.28,94.25,6,1146,163.71428571428572,1,1,['points_vip']
+cust-0116,cant_lose,0.65,462.54,21,8010,190.71428571428572,1,1,"['discount', 'points_vip']"
+cust-0117,new_customer,0.25,90.7,10,3383,211.4375,1,0,"['discount', 'points_vip']"
+cust-0118,hibernating,0.08,86.47,3,1798,299.6666666666667,0,0,[]
+cust-0119,new_customer,0.25,129.03,5,1477,184.625,1,0,"['notification', 'discount']"
+cust-0120,promising,0.3,40.31,17,6280,179.42857142857142,1,1,"['points_vip', 'notification', 'retention']"
+cust-0121,new_customer,0.25,54.62,7,3822,273.0,1,0,"['notification', 'points_vip']"
+cust-0122,loyal,0.6,131.43,20,5313,161.0,1,1,"['discount', 'retention']"
+cust-0123,hibernating,0.08,19.99,4,847,121.0,1,1,['points_vip']
+cust-0124,champions,0.72,282.17,39,12506,152.5121951219512,1,1,"['notification', 'points_vip']"
+cust-0125,promising,0.3,163.72,13,3705,148.2,1,1,"['discount', 'points_vip', 'notification']"
+cust-0126,at_risk,0.22,108.6,9,2688,158.11764705882354,1,0,['points_vip']
+cust-0127,loyal,0.6,265.82,18,6678,222.6,1,1,"['retention', 'points_vip', 'notification']"
+cust-0128,loyal,0.6,337.14,21,7540,193.33333333333334,1,1,"['discount', 'notification', 'points_vip']"
+cust-0129,promising,0.3,189.75,14,5060,163.2258064516129,1,0,['notification']
+cust-0130,loyal,0.6,244.47,18,7463,207.30555555555554,1,1,"['notification', 'points_vip', 'discount']"
+cust-0131,lost_cause,0.05,103.84,5,2096,190.54545454545453,1,0,"['notification', 'discount']"
+cust-0132,promising,0.3,134.15,15,4784,159.46666666666667,1,1,"['points_vip', 'discount']"
+cust-0133,at_risk,0.22,86.5,9,3576,198.66666666666666,1,0,"['retention', 'discount']"
+cust-0134,promising,0.3,103.25,8,2896,193.06666666666666,1,1,['discount']
+cust-0135,champions,0.72,201.95,35,13534,169.175,1,1,"['retention', 'points_vip', 'discount']"
+cust-0136,lost_cause,0.05,47.8,3,1325,165.625,1,0,['points_vip']
+cust-0137,promising,0.3,113.89,8,2513,139.61111111111111,1,1,"['points_vip', 'retention']"
+cust-0138,cant_lose,0.65,496.43,30,11939,189.5079365079365,1,1,"['points_vip', 'retention', 'notification', 'discount']"
+cust-0139,loyal,0.6,387.66,25,10453,204.9607843137255,1,1,['points_vip']
+cust-0140,promising,0.3,67.8,12,4035,149.44444444444446,1,1,"['points_vip', 'retention']"
+cust-0141,promising,0.3,147.68,8,3518,206.94117647058823,1,0,['points_vip']
+cust-0142,lost_cause,0.05,43.99,1,168,84.0,1,0,['discount']
+cust-0143,promising,0.3,151.36,11,3472,157.8181818181818,1,1,"['discount', 'notification', 'retention']"
+cust-0144,hibernating,0.08,86.07,5,2400,200.0,1,0,['retention']
+cust-0145,potential_loyalist,0.35,58.45,5,2404,267.1111111111111,1,0,['discount']
+cust-0146,at_risk,0.22,157.13,9,3775,209.72222222222223,1,0,"['discount', 'retention']"
+cust-0147,promising,0.3,102.77,11,3192,145.0909090909091,1,1,"['retention', 'notification', 'points_vip', 'discount']"
+cust-0148,hibernating,0.08,73.98,5,1300,144.44444444444446,1,0,"['discount', 'retention']"
+cust-0149,champions,0.72,243.02,35,12928,184.68571428571428,1,1,"['notification', 'discount']"
+cust-0150,about_to_sleep,0.28,83.83,7,2287,175.92307692307693,1,0,"['points_vip', 'discount']"
+cust-0151,about_to_sleep,0.28,127.12,7,3517,219.8125,1,1,"['notification', 'points_vip']"
+cust-0152,loyal,0.6,234.86,22,7115,165.46511627906978,1,1,"['retention', 'points_vip']"
+cust-0153,promising,0.3,144.79,9,3199,188.1764705882353,1,0,"['points_vip', 'notification']"
+cust-0154,loyal,0.6,278.95,26,10034,196.7450980392157,1,1,"['notification', 'discount', 'points_vip']"
+cust-0155,new_customer,0.25,146.22,10,3226,146.63636363636363,1,0,"['notification', 'points_vip']"
+cust-0156,potential_loyalist,0.35,132.86,17,6900,197.14285714285714,1,1,['retention']
+cust-0157,new_customer,0.25,48.31,9,3703,168.3181818181818,1,1,"['discount', 'points_vip']"
+cust-0158,cant_lose,0.65,528.07,28,10440,204.7058823529412,1,1,"['notification', 'discount']"
+cust-0159,cant_lose,0.65,360.22,26,10271,193.79245283018867,1,1,"['notification', 'discount', 'points_vip']"
+cust-0160,loyal,0.6,339.17,19,6661,162.46341463414635,1,1,"['notification', 'retention', 'discount']"
+cust-0161,lost_cause,0.05,79.58,8,3058,169.88888888888889,1,0,"['points_vip', 'retention', 'notification']"
+cust-0162,potential_loyalist,0.35,143.44,12,4364,189.7391304347826,1,1,['retention']
+cust-0163,champions,0.72,384.88,19,7371,216.7941176470588,1,1,"['points_vip', 'discount', 'notification']"
+cust-0164,promising,0.3,217.8,12,3531,153.52173913043478,1,1,"['discount', 'retention']"
+cust-0165,at_risk,0.22,203.08,7,2789,214.53846153846155,1,1,"['retention', 'notification']"
+cust-0166,about_to_sleep,0.28,112.78,9,2516,193.53846153846155,1,1,['discount']
+cust-0167,about_to_sleep,0.28,116.41,5,2480,206.66666666666666,1,0,['retention']
+cust-0168,at_risk,0.22,163.05,7,2122,124.82352941176471,1,0,"['notification', 'points_vip']"
+cust-0169,lost_cause,0.05,48.86,3,1138,142.25,1,0,['points_vip']
+cust-0170,potential_loyalist,0.35,166.65,8,2592,172.8,1,0,"['retention', 'notification']"
+cust-0171,promising,0.3,128.84,16,5526,172.6875,1,1,"['points_vip', 'retention']"
+cust-0172,potential_loyalist,0.35,165.7,8,2193,146.2,1,0,"['discount', 'retention']"
+cust-0173,lost_cause,0.05,49.17,8,3374,198.47058823529412,1,0,"['points_vip', 'notification']"
+cust-0174,loyal,0.6,122.83,19,4798,133.27777777777777,1,1,"['retention', 'discount', 'points_vip']"
+cust-0175,champions,0.72,142.7,49,17845,191.88172043010752,0,0,[]
+cust-0176,hibernating,0.08,56.48,7,2107,131.6875,1,1,"['points_vip', 'notification', 'retention']"
+cust-0177,lost_cause,0.05,58.53,2,833,166.6,1,0,['retention']
+cust-0178,about_to_sleep,0.28,98.27,9,2564,128.2,1,1,['discount']
+cust-0179,cant_lose,0.65,632.47,30,11052,184.2,1,1,"['notification', 'retention']"
+cust-0180,about_to_sleep,0.28,154.24,6,3364,258.7692307692308,1,1,['retention']
+cust-0181,about_to_sleep,0.28,71.52,3,913,152.16666666666666,1,0,['discount']
+cust-0182,promising,0.3,145.65,6,1815,139.6153846153846,1,1,"['retention', 'points_vip', 'discount']"
+cust-0183,at_risk,0.22,103.72,11,3555,177.75,1,0,"['discount', 'retention']"
+cust-0184,cant_lose,0.65,365.88,18,5458,147.51351351351352,1,1,"['points_vip', 'retention']"
+cust-0185,new_customer,0.25,106.49,10,4569,253.83333333333334,1,1,"['discount', 'retention']"
+cust-0186,at_risk,0.22,144.77,6,1795,163.1818181818182,1,1,['retention']
+cust-0187,loyal,0.6,222.86,25,7974,156.35294117647058,1,1,['points_vip']
+cust-0188,cant_lose,0.65,527.66,32,9961,166.01666666666668,1,1,"['notification', 'points_vip']"
+cust-0189,potential_loyalist,0.35,92.9,17,6123,191.34375,1,1,['retention']
+cust-0190,lost_cause,0.05,70.16,1,392,130.66666666666666,1,0,['notification']
+cust-0191,potential_loyalist,0.35,279.88,20,7538,183.85365853658536,1,1,"['discount', 'retention', 'points_vip']"
+cust-0192,loyal,0.6,267.85,26,9620,178.14814814814815,1,1,"['points_vip', 'discount']"
+cust-0193,about_to_sleep,0.28,167.33,9,2539,158.6875,1,1,"['discount', 'retention']"
+cust-0194,loyal,0.6,257.32,13,3727,143.34615384615384,1,1,"['points_vip', 'retention']"
+cust-0195,loyal,0.6,296.46,17,6700,209.375,1,1,"['points_vip', 'retention']"
+cust-0196,promising,0.3,127.44,12,5952,220.44444444444446,1,0,"['retention', 'notification']"
+cust-0197,about_to_sleep,0.28,103.18,12,4226,169.04,1,1,"['retention', 'notification']"
+cust-0198,potential_loyalist,0.35,111.03,15,7562,243.93548387096774,1,1,"['retention', 'discount']"
+cust-0199,at_risk,0.22,137.21,5,1958,163.16666666666666,1,1,"['notification', 'retention', 'points_vip']"
+cust-0200,cant_lose,0.65,297.82,30,10396,192.5185185185185,1,1,"['retention', 'points_vip']"
+cust-0201,lost_cause,0.05,86.64,3,848,282.6666666666667,1,0,"['discount', 'notification']"
+cust-0202,promising,0.3,178.84,11,4161,173.375,1,1,"['points_vip', 'retention']"
+cust-0203,loyal,0.6,279.32,20,8482,184.3913043478261,1,1,['retention']
+cust-0204,champions,0.72,321.38,36,10075,152.65151515151516,1,1,"['discount', 'notification', 'retention']"
+cust-0205,potential_loyalist,0.35,172.7,15,5777,186.3548387096774,1,0,['notification']
+cust-0206,loyal,0.6,225.31,16,6905,197.28571428571428,1,1,"['retention', 'discount']"
+cust-0207,new_customer,0.25,132.74,11,5655,235.625,1,0,['points_vip']
+cust-0208,loyal,0.6,103.49,19,6326,191.6969696969697,1,1,"['retention', 'points_vip', 'discount']"
+cust-0209,promising,0.3,114.9,14,4730,163.10344827586206,1,0,"['points_vip', 'notification']"
+cust-0210,new_customer,0.25,30.32,10,3690,175.71428571428572,1,1,"['points_vip', 'notification']"
+cust-0211,promising,0.3,62.72,9,2864,150.73684210526315,1,1,"['retention', 'notification', 'points_vip']"
+cust-0212,potential_loyalist,0.35,218.19,8,3591,171.0,1,1,"['points_vip', 'retention', 'notification']"
+cust-0213,about_to_sleep,0.28,145.81,6,2124,177.0,1,0,['notification']
+cust-0214,new_customer,0.25,74.82,6,3813,254.2,1,0,"['points_vip', 'retention']"
+cust-0215,cant_lose,0.65,219.7,26,9205,173.67924528301887,1,1,"['discount', 'retention']"
+cust-0216,loyal,0.6,12.84,21,6535,176.6216216216216,0,0,[]
+cust-0217,loyal,0.6,206.52,25,9499,182.67307692307693,1,0,['discount']
+cust-0218,lost_cause,0.05,130.51,5,1559,155.9,1,0,['points_vip']
+cust-0219,at_risk,0.22,137.4,7,2630,202.30769230769232,1,1,"['retention', 'discount']"
+cust-0220,at_risk,0.22,97.62,8,3184,176.88888888888889,1,1,"['notification', 'points_vip']"
+cust-0221,promising,0.3,150.93,14,5861,177.6060606060606,1,0,"['retention', 'notification', 'discount']"
+cust-0222,new_customer,0.25,45.37,5,1527,127.25,1,0,"['notification', 'discount']"
+cust-0223,lost_cause,0.05,62.57,2,920,184.0,0,0,[]
+cust-0224,potential_loyalist,0.35,154.97,10,4021,191.47619047619048,1,1,"['discount', 'retention']"
+cust-0225,lost_cause,0.05,67.85,4,2134,237.11111111111111,1,1,['retention']
+cust-0226,champions,0.72,429.08,36,14774,178.0,1,0,['retention']
+cust-0227,promising,0.3,145.51,16,5821,171.2058823529412,1,1,"['notification', 'discount', 'points_vip']"
+cust-0228,new_customer,0.25,123.39,7,2418,172.71428571428572,1,0,"['notification', 'retention']"
+cust-0229,loyal,0.6,194.93,21,7097,181.97435897435898,1,1,['points_vip']
+cust-0230,loyal,0.6,321.83,18,4320,139.3548387096774,1,1,"['retention', 'discount']"
+cust-0231,hibernating,0.08,138.87,6,1052,131.5,1,0,['retention']
+cust-0232,lost_cause,0.05,45.75,5,2377,198.08333333333334,1,0,['discount']
+cust-0233,promising,0.3,90.05,17,5945,160.67567567567568,1,1,"['retention', 'points_vip']"
+cust-0234,lost_cause,0.05,103.39,4,2116,264.5,1,0,"['retention', 'points_vip']"
+cust-0235,about_to_sleep,0.28,102.35,10,3935,187.38095238095238,1,0,['points_vip']
+cust-0236,hibernating,0.08,132.11,3,683,136.6,1,0,['points_vip']
+cust-0237,cant_lose,0.65,346.9,22,6530,167.43589743589743,1,1,"['points_vip', 'notification']"
+cust-0238,champions,0.72,495.5,35,12520,195.625,1,1,"['points_vip', 'notification']"
+cust-0239,loyal,0.6,260.52,15,6905,222.74193548387098,1,1,"['retention', 'points_vip']"
+cust-0240,about_to_sleep,0.28,120.33,14,4425,158.03571428571428,1,1,"['notification', 'points_vip']"
+cust-0241,cant_lose,0.65,587.77,21,6686,171.43589743589743,1,1,"['discount', 'points_vip', 'retention']"
+cust-0242,potential_loyalist,0.35,131.91,10,4676,259.77777777777777,1,1,"['points_vip', 'discount']"
+cust-0243,promising,0.3,87.65,12,3211,145.95454545454547,1,0,"['points_vip', 'retention', 'notification']"
+cust-0244,new_customer,0.25,84.3,9,2926,172.11764705882354,1,1,"['retention', 'points_vip']"
+cust-0245,about_to_sleep,0.28,128.09,7,2603,173.53333333333333,1,0,"['points_vip', 'discount']"
+cust-0246,new_customer,0.25,45.2,4,1820,165.45454545454547,1,1,"['points_vip', 'discount']"
+cust-0247,hibernating,0.08,109.12,6,2632,202.46153846153845,1,0,"['notification', 'retention', 'discount']"
+cust-0248,at_risk,0.22,98.45,9,2986,175.64705882352942,1,0,"['notification', 'discount']"
+cust-0249,hibernating,0.08,124.43,6,2384,183.3846153846154,1,0,['points_vip']
+cust-0250,new_customer,0.25,16.2,3,1655,236.42857142857142,1,1,['notification']
+cust-0251,about_to_sleep,0.28,78.54,9,3469,173.45,1,0,['points_vip']
+cust-0252,hibernating,0.08,39.41,5,2685,244.0909090909091,1,0,"['discount', 'points_vip']"
+cust-0253,potential_loyalist,0.35,108.69,4,2264,323.42857142857144,1,1,"['retention', 'notification']"
+cust-0254,potential_loyalist,0.35,162.38,13,4947,235.57142857142858,1,0,['points_vip']
+cust-0255,cant_lose,0.65,378.49,22,7352,167.0909090909091,1,1,"['retention', 'points_vip', 'discount']"
+cust-0256,about_to_sleep,0.28,99.86,5,1589,158.9,1,1,"['retention', 'points_vip']"
+cust-0257,loyal,0.6,237.27,17,5478,176.70967741935485,1,1,"['retention', 'discount']"
+cust-0258,champions,0.72,370.34,24,6826,162.52380952380952,1,1,"['discount', 'notification']"
+cust-0259,promising,0.3,84.62,17,5601,169.72727272727272,1,0,"['discount', 'points_vip']"
+cust-0260,loyal,0.6,306.55,22,6920,168.78048780487805,1,1,"['discount', 'notification']"
+cust-0261,about_to_sleep,0.28,136.51,8,2190,146.0,0,0,[]
+cust-0262,at_risk,0.22,135.4,7,3452,203.05882352941177,1,1,"['points_vip', 'discount', 'notification']"
+cust-0263,loyal,0.6,294.52,23,7447,151.9795918367347,0,0,[]
+cust-0264,lost_cause,0.05,77.41,5,1871,207.88888888888889,1,0,"['points_vip', 'discount']"
+cust-0265,loyal,0.6,412.81,20,6486,185.31428571428572,1,1,"['discount', 'retention', 'points_vip']"
+cust-0266,potential_loyalist,0.35,145.65,13,6529,225.13793103448276,1,1,"['points_vip', 'retention', 'notification']"
+cust-0267,loyal,0.6,225.43,15,5641,201.46428571428572,1,1,"['points_vip', 'notification', 'retention']"
+cust-0268,loyal,0.6,189.72,19,8161,199.0487804878049,1,1,"['notification', 'discount']"
+cust-0269,champions,0.72,246.77,34,12511,195.484375,1,1,"['discount', 'points_vip', 'retention']"
+cust-0270,champions,0.72,225.55,28,11907,205.29310344827587,1,1,"['points_vip', 'discount']"
+cust-0271,loyal,0.6,178.9,21,8844,184.25,1,1,"['points_vip', 'retention']"
+cust-0272,champions,0.72,342.93,31,12964,193.49253731343285,1,1,"['retention', 'notification', 'points_vip']"
+cust-0273,promising,0.3,145.04,14,5517,204.33333333333334,1,1,"['points_vip', 'retention']"
+cust-0274,new_customer,0.25,101.79,10,3864,184.0,1,1,"['retention', 'points_vip']"
+cust-0275,at_risk,0.22,89.38,12,3155,166.05263157894737,1,0,"['points_vip', 'retention']"
+cust-0276,at_risk,0.22,156.01,5,2543,231.1818181818182,1,0,"['notification', 'points_vip']"
+cust-0277,promising,0.3,163.27,8,2725,247.72727272727272,1,0,"['points_vip', 'retention']"
+cust-0278,about_to_sleep,0.28,103.61,13,4725,175.0,1,1,"['points_vip', 'notification', 'retention']"
+cust-0279,about_to_sleep,0.28,83.88,6,1785,223.125,1,1,['discount']
+cust-0280,champions,0.72,404.84,36,13576,167.60493827160494,1,1,"['discount', 'points_vip', 'retention']"
+cust-0281,potential_loyalist,0.35,159.4,7,2011,154.69230769230768,1,1,"['points_vip', 'retention', 'notification']"
+cust-0282,potential_loyalist,0.35,77.59,4,1549,172.11111111111111,1,1,['points_vip']
+cust-0283,potential_loyalist,0.35,146.6,13,6520,203.75,1,1,"['points_vip', 'notification', 'retention']"
+cust-0284,promising,0.3,141.79,9,2260,107.61904761904762,1,1,"['discount', 'notification']"
+cust-0285,hibernating,0.08,63.01,1,398,199.0,0,0,[]
+cust-0286,champions,0.72,368.98,36,13208,191.42028985507247,1,1,['points_vip']
+cust-0287,at_risk,0.22,61.81,9,3648,192.0,1,1,"['points_vip', 'discount', 'retention']"
+cust-0288,promising,0.3,190.13,11,3856,175.27272727272728,1,0,"['points_vip', 'discount']"
+cust-0289,loyal,0.6,349.84,14,4371,141.0,1,1,"['retention', 'points_vip']"
+cust-0290,about_to_sleep,0.28,99.9,5,1792,199.11111111111111,1,0,"['retention', 'discount']"
+cust-0291,champions,0.72,386.35,41,13949,178.83333333333334,1,1,['points_vip']
+cust-0292,lost_cause,0.05,10.0,1,242,80.66666666666667,1,0,['points_vip']
+cust-0293,loyal,0.6,157.49,25,7505,156.35416666666666,1,1,"['points_vip', 'notification']"
+cust-0294,about_to_sleep,0.28,98.25,9,2743,161.35294117647058,1,0,"['retention', 'points_vip']"
+cust-0295,lost_cause,0.05,43.2,4,1435,179.375,1,0,['points_vip']
+cust-0296,lost_cause,0.05,87.86,5,2988,213.42857142857142,1,0,"['discount', 'points_vip']"
+cust-0297,about_to_sleep,0.28,189.89,9,2694,207.23076923076923,1,1,"['retention', 'discount']"
+cust-0298,cant_lose,0.65,258.81,30,9700,167.24137931034483,1,1,"['discount', 'retention']"
+cust-0299,new_customer,0.25,70.69,9,3490,205.2941176470588,1,1,['discount']

@@ -1,4 +1,4 @@
-"""Promo Advisor — Phase 1
+"""Promo Advisor — Phase 1 & 2
 
 Operator บอก "กำลังจะทำโปรนี้" → ระบบวิเคราะห์:
   1. โปรของ operator ถ้าส่งให้ใครได้ผลยังไง (CFO guardrail)
@@ -18,6 +18,19 @@ Usage:
     )
     result_df, report = promo_advisor(ml_output_df, cust_agg_df, spec)
     print_promo_report(report)
+
+Phase 2 additions:
+    from promo_advisor import (analyze_promo_history, multi_promo_advisor,
+                                add_cannibalization_risk, print_multi_promo_report)
+
+    # Historical analysis
+    history = analyze_promo_history(pos_df, history_path="data/processed/promo_history.jsonl")
+    print_history_report(history)
+
+    # Multi-promo (operator has 2 promos this month)
+    specs = [PromoSpec(...), PromoSpec(...)]
+    resolved_df, report = multi_promo_advisor(ml_output, cust_agg, specs)
+    print_multi_promo_report(report)
 """
 from __future__ import annotations
 
@@ -544,3 +557,474 @@ def print_promo_report(report: dict, currency: str = "฿") -> None:
     print(f"\n{sep}\n")
     print(f"  หมายเหตุ: Δprofit เป็นค่าประมาณจากโมเดล (model-estimated projection)")
     print(f"  บน observational/proxy labels — ไม่ใช่กำไรรับประกันจากแคมเปญจริง\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 2 — Historical Analysis · Cannibalization · Multi-Promo Optimizer
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. Historical Promo Analyzer ─────────────────────────────────────────────
+
+def analyze_promo_history(
+    pos_df: pd.DataFrame,
+    history_path: str | None = None,
+) -> dict:
+    """Analyze past promo performance from two sources:
+
+    Source A — POS ``promo_applied`` column (always available if POS has the field)
+        Groups customers who received a promo vs those who didn't.
+        Computes per-segment response lift = treated_visit_rate - control_visit_rate.
+
+    Source B — promo_history.jsonl written by promo_advisor() calls (accumulates over time)
+        Loads logged promo runs and aggregates scenario C profit per promo_type.
+
+    Returns
+    -------
+    dict with keys:
+        "pos_analysis"      : per-segment × promo_type response stats (from POS)
+        "history_analysis"  : per-promo_type profit summary (from jsonl log)
+        "recommendations"   : list of plain-text suggestions for the operator
+        "confidence"        : "high" / "medium" / "low" based on sample size
+    """
+    results: dict = {
+        "pos_analysis": {},
+        "history_analysis": {},
+        "recommendations": [],
+        "confidence": "low",
+    }
+
+    # ── Source A: POS promo_applied ───────────────────────────────────────────
+    if "promo_applied" in pos_df.columns and "post_promo_visit" in pos_df.columns:
+        # Aggregate to customer level first
+        cid_col = "customer_id" if "customer_id" in pos_df.columns else pos_df.index.name or "index"
+        grp_cols = [cid_col]
+        if "cluster_segment_name" in pos_df.columns:
+            grp_cols.append("cluster_segment_name")
+
+        cust = (
+            pos_df.groupby(grp_cols)
+            .agg(
+                promo_applied=("promo_applied", "max"),
+                converted=("post_promo_visit", "max"),
+            )
+            .reset_index()
+        )
+
+        n_total = len(cust)
+        n_treated = int((cust["promo_applied"] == 1).sum())
+        n_control = n_total - n_treated
+
+        if n_treated >= 10 and n_control >= 10:
+            treat_rate = float(cust[cust["promo_applied"] == 1]["converted"].mean())
+            ctrl_rate  = float(cust[cust["promo_applied"] == 0]["converted"].mean())
+            lift       = round(treat_rate - ctrl_rate, 4)
+
+            results["pos_analysis"]["overall"] = {
+                "n_treated":    n_treated,
+                "n_control":    n_control,
+                "treat_conv":   round(treat_rate, 4),
+                "ctrl_conv":    round(ctrl_rate, 4),
+                "lift":         lift,
+            }
+
+            if "cluster_segment_name" in cust.columns:
+                seg_stats = {}
+                for seg, grp in cust.groupby("cluster_segment_name"):
+                    t = grp[grp["promo_applied"] == 1]
+                    c = grp[grp["promo_applied"] == 0]
+                    if len(t) >= 5 and len(c) >= 5:
+                        seg_lift = round(float(t["converted"].mean()) - float(c["converted"].mean()), 4)
+                        seg_stats[str(seg)] = {
+                            "n_treated": len(t),
+                            "n_control": len(c),
+                            "lift":      seg_lift,
+                            "treat_conv": round(float(t["converted"].mean()), 4),
+                            "ctrl_conv":  round(float(c["converted"].mean()), 4),
+                        }
+                results["pos_analysis"]["by_segment"] = seg_stats
+
+                # Recommendations from segment lifts
+                if seg_stats:
+                    best_seg  = max(seg_stats, key=lambda s: seg_stats[s]["lift"])
+                    worst_seg = min(seg_stats, key=lambda s: seg_stats[s]["lift"])
+                    best_lift = seg_stats[best_seg]["lift"]
+                    worst_lift = seg_stats[worst_seg]["lift"]
+                    results["recommendations"].append(
+                        f"Segment ที่ตอบสนองดีที่สุด: '{best_seg}' (lift={best_lift:+.1%}) "
+                        f"→ เน้นโปรประเภทนี้กับ {best_seg}"
+                    )
+                    if worst_lift <= 0:
+                        results["recommendations"].append(
+                            f"Segment '{worst_seg}' มี lift={worst_lift:+.1%} ≤ 0 "
+                            f"→ ไม่ควรส่งโปรประเภทนี้ให้กลุ่มนี้"
+                        )
+
+            results["confidence"] = "medium" if n_treated >= 50 else "low"
+
+    # ── Source B: promo_history.jsonl ─────────────────────────────────────────
+    if history_path and os.path.exists(history_path):
+        history_entries: list[dict] = []
+        try:
+            with open(history_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        history_entries.append(json.loads(line))
+        except Exception:
+            pass
+
+        if history_entries:
+            # Aggregate profit by promo_type
+            type_profit: dict[str, list[float]] = {}
+            type_count:  dict[str, int]  = {}
+            for entry in history_entries:
+                spec_dict = entry.get("promo_spec", {})
+                p_type    = spec_dict.get("promo_type", "unknown")
+                scenario_c = entry.get("summary", {}).get("scenario_C", {})
+                profit     = scenario_c.get("profit", None)
+                if profit is not None:
+                    type_profit.setdefault(p_type, []).append(float(profit))
+                    type_count[p_type]  = type_count.get(p_type, 0) + 1
+
+            history_summary = {}
+            for p_type, profits in type_profit.items():
+                history_summary[p_type] = {
+                    "runs":        type_count[p_type],
+                    "avg_profit":  round(float(np.mean(profits)), 2),
+                    "total_profit": round(float(np.sum(profits)), 2),
+                    "best_profit": round(float(np.max(profits)), 2),
+                }
+            results["history_analysis"] = history_summary
+
+            if history_summary:
+                best_type = max(history_summary, key=lambda t: history_summary[t]["avg_profit"])
+                results["recommendations"].append(
+                    f"ประเภทโปรที่ให้กำไรเฉลี่ยสูงสุดจากประวัติ: '{best_type}' "
+                    f"(เฉลี่ย ฿{history_summary[best_type]['avg_profit']:,.0f} / run)"
+                )
+                if len(history_entries) >= 5:
+                    results["confidence"] = "high"
+                elif len(history_entries) >= 2:
+                    results["confidence"] = max(results["confidence"],
+                                                "medium",
+                                                key=lambda x: ["low","medium","high"].index(x))
+
+    if not results["recommendations"]:
+        results["recommendations"].append(
+            "ข้อมูลประวัติโปรยังน้อย — ผลจะแม่นขึ้นหลังรัน Promo Advisor ไปอีก 2–3 ครั้ง"
+        )
+
+    return results
+
+
+def print_history_report(analysis: dict, currency: str = "฿") -> None:
+    """Pretty-print the historical analysis to stdout."""
+    sep = "─" * 56
+    print(f"\n{sep}")
+    print(f"  Historical Promo Analysis  (confidence: {analysis['confidence']})")
+    print(sep)
+
+    pos = analysis.get("pos_analysis", {})
+    if pos.get("overall"):
+        ov = pos["overall"]
+        print(f"\n  POS Data — Overall (promo_applied)")
+        print(f"    Treated : {ov['n_treated']:,} คน  conv={ov['treat_conv']:.1%}")
+        print(f"    Control : {ov['n_control']:,} คน  conv={ov['ctrl_conv']:.1%}")
+        print(f"    Lift    : {ov['lift']:+.1%}")
+        by_seg = pos.get("by_segment", {})
+        if by_seg:
+            print(f"\n  By Segment:")
+            for seg, s in sorted(by_seg.items(), key=lambda x: -x[1]["lift"]):
+                bar = "▓" * max(0, int(s["lift"] * 100)) if s["lift"] > 0 else "░"
+                print(f"    {seg:<22} lift={s['lift']:+.1%}  {bar}")
+
+    hist = analysis.get("history_analysis", {})
+    if hist:
+        print(f"\n  Promo History Log — Avg Profit per Type:")
+        for p_type, h in sorted(hist.items(), key=lambda x: -x[1]["avg_profit"]):
+            print(f"    {p_type:<20} {currency}{h['avg_profit']:>8,.0f}/run  "
+                  f"({h['runs']} runs, best={currency}{h['best_profit']:,.0f})")
+
+    recs = analysis.get("recommendations", [])
+    if recs:
+        print(f"\n  คำแนะนำ:")
+        for r in recs:
+            print(f"    • {r}")
+    print(f"\n{sep}\n")
+
+
+# ── 2. Cannibalization Risk Score ─────────────────────────────────────────────
+
+def add_cannibalization_risk(
+    df: pd.DataFrame,
+    baseline_col: str = "prob_control",
+    high_baseline_threshold: float = 0.65,
+    cannib_discount: float = 0.40,
+) -> pd.DataFrame:
+    """Flag customers likely to purchase regardless of the promo (cannibalization risk).
+
+    A customer with high baseline conversion probability (prob_control ≥ threshold)
+    is likely to buy anyway — the promo just gives them a discount they don't need
+    to trigger a visit. This discounts their expected incremental profit.
+
+    New columns:
+        cannibalization_risk   : bool — True if prob_control >= threshold
+        adjusted_profit        : expected_profit after cannibalization discount
+        cannib_discount_applied: float — fraction discounted (0 if no risk)
+    """
+    df = df.copy()
+    baseline = df[baseline_col].fillna(0.0) if baseline_col in df.columns else pd.Series(0.0, index=df.index)
+    df["cannibalization_risk"] = baseline >= high_baseline_threshold
+
+    if "operator_promo_profit" in df.columns:
+        profit_col = "operator_promo_profit"
+    elif "expected_profit" in df.columns:
+        profit_col = "expected_profit"
+    else:
+        df["adjusted_profit"] = 0.0
+        df["cannib_discount_applied"] = 0.0
+        return df
+
+    df["adjusted_profit"] = df.apply(
+        lambda row: (
+            round(float(row[profit_col]) * (1.0 - cannib_discount), 2)
+            if row["cannibalization_risk"] and float(row[profit_col]) > 0
+            else float(row[profit_col])
+        ),
+        axis=1,
+    )
+    df["cannib_discount_applied"] = df["cannibalization_risk"].apply(
+        lambda r: cannib_discount if r else 0.0
+    )
+    return df
+
+
+# ── 3. Multi-Promo Optimizer ──────────────────────────────────────────────────
+
+def multi_promo_advisor(
+    ml_output: pd.DataFrame,
+    cust_agg: pd.DataFrame,
+    promo_specs: list[PromoSpec],
+    cogs_rate: float = 0.50,
+    min_margin: float = 0.15,
+    max_promos_per_customer: int = 1,
+    apply_cannibalization: bool = True,
+    history_path: str | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    """Optimize across multiple operator promos — each customer gets at most
+    ``max_promos_per_customer`` offers (default 1) to prevent message spam.
+
+    Algorithm:
+      1. Evaluate each PromoSpec independently (CFO guardrail per customer).
+      2. Apply cannibalization risk discount to high-baseline customers.
+      3. For each customer, rank all viable promos + ML recommendation by
+         adjusted profit. Assign the top-N (N = max_promos_per_customer).
+      4. Report per-promo send counts + overall Scenario A/B_total/C.
+
+    Parameters
+    ----------
+    promo_specs              : list of PromoSpec (operator's planned promos this month)
+    max_promos_per_customer  : max number of different offers per customer (default 1)
+    apply_cannibalization    : discount incremental profit for high-baseline customers
+    history_path             : optional path to promo_history.jsonl for logging
+
+    Returns
+    -------
+    resolved_df : per-customer DataFrame with assigned promo + reason
+    report      : multi-promo summary dict
+    """
+    if not promo_specs:
+        raise ValueError("promo_specs must contain at least one PromoSpec")
+
+    n_cust = len(cust_agg)
+
+    # ── Step 1: evaluate each promo independently ─────────────────────────────
+    all_evals: list[pd.DataFrame] = []
+    for spec in promo_specs:
+        ev = evaluate_operator_promo(ml_output, cust_agg, spec,
+                                     cogs_rate=cogs_rate, min_margin=min_margin)
+        ev["_promo_name"] = spec.name
+        ev["_promo_type"] = spec.promo_type
+        ev["_promo_idx"]  = promo_specs.index(spec)
+        if apply_cannibalization:
+            ev = add_cannibalization_risk(ev, cannib_discount=0.40)
+            profit_col = "adjusted_profit"
+        else:
+            ev["adjusted_profit"] = ev["operator_promo_profit"]
+            profit_col = "adjusted_profit"
+        all_evals.append(ev[["customer_id", "_promo_name", "_promo_type",
+                               "_promo_idx", "promo_viable", profit_col,
+                               "operator_promo_cost",
+                               "cannibalization_risk" if apply_cannibalization else "promo_viable",
+                               "operator_promo_blocked_reason"]])
+
+    # ── Step 2: ML output (counts as one option per customer) ─────────────────
+    ml_opts = ml_output[["customer_id", "recommended_action",
+                           "expected_profit", "promo_cost", "should_send"]].copy()
+    ml_opts = ml_opts.rename(columns={
+        "recommended_action": "_promo_name",
+        "expected_profit":    "adjusted_profit",
+        "promo_cost":         "operator_promo_cost",
+    })
+    ml_opts["_promo_type"]  = "ml"
+    ml_opts["_promo_idx"]   = -1
+    ml_opts["promo_viable"] = ml_opts["should_send"] == 1
+    ml_opts["operator_promo_blocked_reason"] = ""
+    if apply_cannibalization:
+        ml_opts["cannibalization_risk"] = False  # ML already accounts for uplift
+
+    all_options = pd.concat(
+        all_evals + [ml_opts[all_evals[0].columns]],
+        ignore_index=True,
+    )
+
+    # ── Step 3: Per-customer assignment ───────────────────────────────────────
+    assignments: list[dict] = []
+    for cid, grp in all_options.groupby("customer_id"):
+        viable = grp[grp["promo_viable"] == True].sort_values(
+            "adjusted_profit", ascending=False
+        )
+        assigned = viable.head(max_promos_per_customer)
+
+        if len(assigned) == 0:
+            assignments.append({
+                "customer_id":          cid,
+                "assigned_promos":      [],
+                "assigned_sources":     [],
+                "total_assigned_profit": 0.0,
+                "total_assigned_cost":   0.0,
+                "final_should_send":    0,
+                "multi_advisor_reason": "ไม่มีโปรหรือ ML ที่ผ่าน guardrail",
+            })
+        else:
+            promos   = assigned["_promo_name"].tolist()
+            sources  = assigned["_promo_type"].tolist()
+            profits  = round(float(assigned["adjusted_profit"].sum()), 2)
+            costs    = round(float(assigned["operator_promo_cost"].sum()), 2)
+            if len(promos) == 1:
+                reason = (f"เลือก '{promos[0]}' "
+                          f"(กำไรสูงสุดจาก {len(grp[grp['promo_viable']==True])} ตัวเลือก)")
+            else:
+                reason = f"ส่ง {len(promos)} โปร: {', '.join(promos)}"
+            assignments.append({
+                "customer_id":           cid,
+                "assigned_promos":       promos,
+                "assigned_sources":      sources,
+                "total_assigned_profit": profits,
+                "total_assigned_cost":   costs,
+                "final_should_send":     1,
+                "multi_advisor_reason":  reason,
+            })
+
+    assign_df = pd.DataFrame(assignments)
+    # Flatten for broadcast list (take first assigned promo as "final_action")
+    assign_df["final_action"] = assign_df["assigned_promos"].apply(
+        lambda x: x[0] if x else "Do Nothing (No Viable Promo)"
+    )
+    assign_df["final_source"] = assign_df["assigned_sources"].apply(
+        lambda x: x[0] if x else "none"
+    )
+
+    resolved = cust_agg.merge(assign_df, on="customer_id", how="left")
+
+    # ── Step 4: Build report ───────────────────────────────────────────────────
+    total_send   = int((assign_df["final_should_send"] == 1).sum())
+    total_profit = round(float(assign_df["total_assigned_profit"].sum()), 2)
+
+    # Scenario A: ML only
+    ml_send   = ml_output[ml_output["should_send"] == 1]
+    a_profit  = round(float(ml_send["expected_profit"].sum()), 2)
+    a_send    = int(len(ml_send))
+
+    # Scenario B: all operator promos broadcast (guardrail applied, sum across promos)
+    b_total_send = 0
+    b_total_profit = 0.0
+    per_promo_summary = {}
+    for i, spec in enumerate(promo_specs):
+        ev = all_evals[i]
+        viable = ev[ev["promo_viable"] == True]
+        b_total_send   += len(viable)
+        b_total_profit += float(viable["adjusted_profit"].sum())
+        per_promo_summary[spec.name] = {
+            "target":    int((ev["promo_viable"] | True).sum()),
+            "viable":    len(viable),
+            "profit":    round(float(viable["adjusted_profit"].sum()), 2),
+        }
+
+    # Dedup stats
+    n_from_op = int((assign_df["final_source"] != "ml").sum())
+    n_from_ml = int((assign_df["final_source"] == "ml").sum())
+    n_conflict = int(all_options.groupby("customer_id").apply(
+        lambda g: (g["promo_viable"].sum() > 1)
+    ).sum())
+
+    # Log each spec
+    if history_path:
+        for spec in promo_specs:
+            _log_promo_history(spec, {
+                "multi_promo": True,
+                "total_send": total_send,
+                "total_profit": total_profit,
+            }, history_path)
+
+    report = {
+        "n_promos":        len(promo_specs),
+        "total_customers": n_cust,
+        "scenario_A": {"label": "ML Only",          "send": a_send,       "profit": a_profit},
+        "scenario_B": {"label": "All Operator Promos (guardrail applied, may double-send)",
+                       "send": b_total_send, "profit": round(b_total_profit, 2)},
+        "scenario_C": {
+            "label":        "Multi-Promo Optimal (max 1 per customer)",
+            "send":         total_send,
+            "profit":       total_profit,
+            "from_operator": n_from_op,
+            "from_ml":       n_from_ml,
+            "vs_A_profit":  round(total_profit - a_profit, 2),
+            "vs_B_profit":  round(total_profit - b_total_profit, 2),
+        },
+        "per_promo":               per_promo_summary,
+        "customers_with_multiple_viable": n_conflict,
+        "max_promos_per_customer": max_promos_per_customer,
+        "cannibalization_applied": apply_cannibalization,
+    }
+    return resolved, report
+
+
+def print_multi_promo_report(report: dict, currency: str = "฿") -> None:
+    """Pretty-print multi-promo optimizer report."""
+    sep = "═" * 56
+    c   = currency
+    print(f"\n{sep}")
+    print(f"  Multi-Promo Advisor Report  ({report['n_promos']} โปร)")
+    print(f"  ลูกค้าทั้งหมด: {report['total_customers']:,} คน")
+    print(sep)
+
+    A = report["scenario_A"]
+    B = report["scenario_B"]
+    C = report["scenario_C"]
+
+    print(f"\n  Scenario A — {A['label']}")
+    print(f"    ส่ง {A['send']:,} คน  |  Δprofit: {c}{A['profit']:,.0f}")
+
+    print(f"\n  Scenario B — {B['label']}")
+    print(f"    ส่ง {B['send']:,} ครั้ง (อาจส่งซ้ำคนเดียวกัน)  |  Δprofit: {c}{B['profit']:,.0f}")
+
+    print(f"\n  Scenario C — {C['label']}  ◀ แนะนำ")
+    print(f"    ส่ง {C['send']:,} คน  |  Δprofit: {c}{C['profit']:,.0f}")
+    print(f"      ├── ใช้โปรร้าน: {C['from_operator']:,} คน")
+    print(f"      └── ใช้ ML    : {C['from_ml']:,} คน")
+    sign_a = "+" if C["vs_A_profit"] >= 0 else ""
+    sign_b = "+" if C["vs_B_profit"] >= 0 else ""
+    print(f"    vs A: {sign_a}{c}{C['vs_A_profit']:,.0f}  |  vs B: {sign_b}{c}{C['vs_B_profit']:,.0f}")
+
+    if report.get("per_promo"):
+        print(f"\n  Per-Promo Breakdown:")
+        for pname, ps in report["per_promo"].items():
+            print(f"    {pname[:40]:<40}  viable={ps['viable']:,}  "
+                  f"profit={c}{ps['profit']:,.0f}")
+
+    print(f"\n  ลูกค้าที่มีหลายโปรให้เลือก: {report['customers_with_multiple_viable']:,} คน "
+          f"(เลือกกำไรสูงสุด)")
+    if report.get("cannibalization_applied"):
+        print(f"  ✓ Cannibalization discount ถูก apply แล้ว (baseline conv ≥ 65% → ลด profit 40%)")
+    print(f"\n{sep}\n")
