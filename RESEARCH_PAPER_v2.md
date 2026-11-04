@@ -70,6 +70,7 @@ The primary contributions of this work are:
 - **Calibrated uplift probability estimates (v1.15):** Base learners μ₀ and μ₁ are wrapped with `CalibratedClassifierCV(isotonic, cv=3)`, reducing ECE by 87% (0.2496 → 0.0323) and producing reliable probability inputs to the CFO Guardrail profit formula (Section 4.4.1).
 - **Post-campaign feedback loop (v1.15):** `holdout_evaluator.py` ingests actual post-campaign outcomes, computes statistically-tested conversion lift with 95% confidence intervals, and exports retrain-ready labeled data compatible with Layer 4's real label mode — closing the measurement loop from campaign deployment through model retraining (Section 4.6).
 - **Budget-constrained campaign targeting (Section 4.4.8):** A greedy knapsack optimizer (`budget_optimizer.py`) selects the profit-maximizing subset of CFO-approved customers within an operator-specified spend ceiling. Customers are ordered by bang-per-buck (expected_profit / promo_cost) and selected cumulatively — provably optimal for the **fractional** knapsack. For the **0/1 knapsack**, the algorithm achieves at least a **1/2-approximation** when combined with the option of selecting the single highest-profit customer as an alternative: *max(greedy result, best single item)* ≥ ½ × OPT — in O(n log n) time. When no budget ceiling is specified, all CFO-approved customers are selected unchanged. *(Implementation complete; empirical validation against a real campaign with a fixed budget ceiling is pending.)*
+- **Operator Promo Advisor (Section 4.4.11):** A two-phase coordination layer (`promo_advisor.py`) that subjects operator-planned promotions to the CFO guardrail at per-customer resolution — using an asymmetric spend-basis formulation that correctly scopes discount cost to the promoted category while crediting full-basket gross margin — and resolves conflicts against ML recommendations via type-group classification and a conservative tie-breaking rule that preserves operator intent when profit outcomes are within 10%. A three-scenario comparison framework (ML only / operator only / Promo Advisor optimal) quantifies the incremental value of coordination, while Phase 2 extensions add historical lift analysis, cannibalization risk adjustment, and multi-promo resolution across simultaneous promotional calendars. *(Implementation complete; empirical validation on real operator campaigns is pending.)*
 - **CLV-informed rescue tier viability (Section 4.4.9):** A third viability function `_viable_clv()` conditions rescue campaign approval on `promo_cost ≤ clv_at_risk` — the expected revenue lost if the customer churns without intervention, estimated via a BG/NBD survival model (Beta-Geometric/Negative Binomial Distribution; Fader et al. 2005 [34]). This replaces the heuristic `_viable_loyalty` check for rescue tiers with a CLV-grounded financial justification. For high-frequency retail datasets where BG/NBD fails to converge (a known limitation for daily/weekly purchasing), the function falls back automatically to `_viable_loyalty`, preserving backward compatibility. *(Implementation complete; BG/NBD falls back to heuristic on all tested datasets — dessert-ml and Dunnhumby — due to high purchase frequency. Empirical CLV results are pending.)*
 - **Pooled multi-treatment uplift on a true RCT (Section 4.4.10, 5.1, 6.11):** A `PooledMultiTreatmentModel` trains a single X-learner with treatment arm encoded as one-hot features, sharing learning signal across arms rather than fitting separate one-vs-rest models. Evaluated on the Hillstrom MineThatData RCT [33] (64,000 customers, three balanced arms: no email / mens email / womens email). Results on holdout: Qini = 0.1215, AUUC = 0.0614, ATE calibration error of 9% (predicted +0.056 vs actual +0.062) — substantially lower than the 247% error observed under proxy-label training on retail datasets, where the absence of true randomization inflates apparent ATE discrepancy. Best-arm assignment: 68.7% mens email / 31.3% womens email, consistent with observed +7.7pp vs +4.5pp arm uplifts.
 
@@ -622,6 +623,51 @@ The tau (CATE) models learn: "given customer characteristics **X** and arm indic
 **Inference:** `predict_all_cates(X)` queries the single base model once per arm, setting the arm features to that arm's indicator vector. `predict_best_treatment(X)` returns the arm with the highest predicted CATE per customer. `predict_uplift(X)` returns the best CATE for compatibility with the existing single-treatment serving pipeline. `feature_names_` stores only the base features (excluding arm columns) — the serving pipeline passes base features; arm columns are added internally.
 
 **Base features (18):** recency, history_log (log₁ of purchase history), mens, womens, newbie, zip_rural, zip_suburban, zip_urban, channel_multichannel, channel_phone, channel_web, hist_seg_1 through hist_seg_7 (seven history-segment one-hot indicators).
+
+#### 4.4.11 Operator Promo Advisor
+
+Operators routinely plan promotional campaigns — seasonal discounts, bundle offers, buy-one-get-one mechanics — independently of the ML pipeline. Without explicit coordination, the ML system and the operator's promotional calendar may target the same customer simultaneously with incompatible or redundant offers, creating conflicting customer experiences and distorting incremental profit attribution. The Operator Promo Advisor (`promo_advisor.py`) provides a structured interface for operators to register planned promotions, subjects each to the CFO guardrail at customer resolution, and resolves conflicts against the ML pipeline's recommended actions — producing a composite campaign assignment that respects both financial discipline and operator intent.
+
+**PromoSpec interface:** An operator describes a planned promotion via a `PromoSpec` data structure specifying: `name`, `discount_rate`, `promo_type` (e.g., `discount`, `bogo`, `bundle`), `scope` (`all_items`, `category`, `specific_items`), `category` (relevant when `scope = category`), `target` (segment filter), and `segments` (list of eligible IBM segment names). This declarative specification decouples promotion definition from evaluation logic, enabling batch evaluation across an entire customer base without code modification.
+
+**CFO guardrail for operator promos:** `evaluate_operator_promo()` applies a per-customer financial viability check analogous to the standard CFO guardrail. A key design decision is the asymmetric treatment of gross margin and promo cost: if the promotion drives a customer visit, the customer purchases their full habitual basket — not merely the discounted category. Accordingly, gross margin is computed on the full average spend, while promo cost is applied only to the relevant spend basis. Formally, let:
+
+- $\bar{s}$ = customer's `avg_spent` (full basket average)
+- $\bar{s}_c$ = customer's `avg_top_category_spent` (category-level average)
+- $d$ = `discount_rate`
+- $g$ = gross margin rate ($1 - \text{COGS}$)
+- $\hat{\tau}$ = estimated CATE (uplift score)
+- $\delta$ = `min_margin_floor`
+
+The spend basis for the discount is:
+
+$$\text{spend\_basis} = \begin{cases} \bar{s}_c & \text{if scope} = \texttt{category} \text{ and customer's top category matches} \\ \bar{s} & \text{otherwise} \end{cases}$$
+
+The viability quantities are then:
+
+$$\text{gross\_margin} = \bar{s} \cdot g$$
+
+$$\text{promo\_cost} = \text{spend\_basis} \cdot d$$
+
+$$\text{net\_margin} = \frac{\text{gross\_margin} - \text{promo\_cost}}{\bar{s}}$$
+
+$$\text{operator\_promo\_profit} = \text{gross\_margin} \cdot \hat{\tau} - \text{promo\_cost}$$
+
+A customer is marked viable for the operator promo if and only if $\text{net\_margin} \geq \delta$ and $\text{operator\_promo\_profit} > 0$. The asymmetric spend-basis design prevents category-scoped promotions from being incorrectly blocked by an overstated cost: a customer who spends ฿300 per visit but only ฿80 on the promoted category incurs a promo cost of ฿40 under a 50% category discount — not ฿150 — while the gross margin calculation correctly credits the full ฿300 basket value that the visit generates. The function returns incremental profit only (rather than total projected value $\text{gross\_margin} \cdot (p_{\text{control}} + \hat{\tau}) - \text{promo\_cost}$), ensuring Operator Promo Advisor outputs are directly comparable with the ML pipeline's `expected_profit` figures in the conflict resolution step.
+
+**Conflict resolution and tie-breaking:** `resolve_per_customer()` determines the final action assignment when both the ML pipeline and an operator promo target the same customer. Actions are classified into coarse type groups — `discount`, `points_vip`, `retention`, `notification` — based on their promotional mechanics. When the ML recommendation and the operator promo share the same type group, the assignments are considered conflicting; the action with the higher incremental profit is selected. When the two actions belong to different type groups, they are compatible in principle; `resolve_per_customer()` again selects the higher incremental profit. In both cases, a conservative tie-breaking rule applies: if $|\text{ml\_profit} - \text{op\_profit}| / \max(\text{ml\_profit}, \text{op\_profit}) < 0.10$, the operator promo is preferred, reflecting the principle that when financial outcomes are approximately equal, the operator's planned campaign intent should be respected. The resolution output records the winning action, its source (`ml` or `operator`), and both profit figures for audit purposes.
+
+**Scenario comparison framework:** `compare_scenarios()` generates three reference points for each customer base evaluation:
+
+- **Scenario A — ML only:** Standard Layer 4 output with no operator promotion applied. All customers receive the ML-recommended action subject to the existing CFO guardrail.
+- **Scenario B — Operator promo only:** The operator promotion is applied uniformly to all eligible customers, subject to the per-customer CFO guardrail. Customers for whom the promo fails viability are suppressed. This scenario isolates the financial performance of the operator's plan independent of ML personalization.
+- **Scenario C — Promo Advisor optimal:** The conflict resolution logic is applied across all customers, producing the profit-maximising composite assignment. Scenario C expected profit is bounded below by the better of Scenarios A and B, and in practice exceeds both when complementary promos are compatible for a material fraction of the customer base.
+
+The three-scenario output enables operators to quantify the incremental value of ML-operator coordination relative to either system acting alone.
+
+**Phase 2 — historical analysis and multi-promo support:** `analyze_promo_history()` ingests POS `promo_applied` transaction flags and a `promo_history.jsonl` log to compute historical lift, conversion rates, and average incremental profit per promo type — providing empirical calibration for future PromoSpec discount rate and target configuration. `add_cannibalization_risk()` identifies customers with high baseline conversion probability ($p_{\text{control}} \geq 0.65$) and applies a 40% discount to their projected operator promo profit, preventing the system from over-valuing promotions sent to customers who would have visited regardless of any offer. `multi_promo_advisor()` extends the single-promo evaluation to a set of competing PromoSpecs: each spec is evaluated independently, the best viable spec per customer is selected, `max_promos_per_customer = 1` is enforced, and the full Scenario A/B/C comparison is recomputed across the aggregate customer base. This enables operators managing simultaneous multi-channel promotional calendars to obtain a single globally-consistent campaign assignment.
+
+*Implementation complete; empirical validation on real operator campaigns is pending.*
 
 ### 4.5 Layer 5 — LLM Executive Report
 
