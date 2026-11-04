@@ -125,6 +125,84 @@ class MultiTreatmentUpliftModel:
         return getattr(first, 'feature_names_', None)
 
 
+class PooledMultiTreatmentModel:
+    """Single X-learner trained with treatment arm as one-hot features (pooled learning).
+
+    Pooled learning advantages over one-vs-rest (MultiTreatmentUpliftModel):
+      - Shares signal across arms: customers responsive to arm A likely share
+        characteristics with those responsive to arm B → lower variance.
+      - Single model → faster serving, single set of hyperparameters.
+      - Works well when individual arms are sparse (< 5K observations each).
+
+    Training: see train_hillstrom.py
+    Arm features are added internally at inference — the serving pipeline only
+    passes base features (without arm columns) to predict_uplift / predict_control_proba.
+
+    Attribute
+    ---------
+    feature_names_   list of BASE feature names (no arm features) — set by _with_names().
+    """
+
+    def __init__(self, base_model, treatment_arms: list, arm_feature_prefix: str = "arm_"):
+        self.base_model          = base_model       # XLearnerModel trained with arm features
+        self.treatment_arms      = list(treatment_arms)
+        self.arm_feature_prefix  = arm_feature_prefix
+        self.feature_names_      = None             # set by _with_names() after init
+
+    def _add_arm_features(self, X, arm: str | None):
+        """Return DataFrame copy of X with arm one-hot features appended.
+
+        arm=None → all arm features set to 0 (control / no treatment).
+        """
+        import pandas as pd
+        if not isinstance(X, pd.DataFrame):
+            cols = self.feature_names_ or [f"f{i}" for i in range(X.shape[1])]
+            X = pd.DataFrame(X, columns=cols)
+        else:
+            X = X.copy()
+        for a in self.treatment_arms:
+            col = f"{self.arm_feature_prefix}{a}"
+            X[col] = 1.0 if (arm is not None and a == arm) else 0.0
+        return X
+
+    def _all_model_features(self) -> list:
+        """Full feature list including arm columns (matches base_model training)."""
+        arm_cols = [f"{self.arm_feature_prefix}{a}" for a in self.treatment_arms]
+        base = list(self.feature_names_) if self.feature_names_ else []
+        return base + arm_cols
+
+    def predict_all_cates(self, X) -> dict:
+        """Return {arm_name: cate_array} for every treatment arm."""
+        return {
+            arm: self.base_model.predict_uplift(self._add_arm_features(X, arm))
+            for arm in self.treatment_arms
+        }
+
+    def predict_best_treatment(self, X) -> tuple:
+        """Return (best_arm_array, best_cate_array) per customer."""
+        import numpy as np
+        all_cates = self.predict_all_cates(X)
+        types  = list(all_cates.keys())
+        matrix = np.column_stack([all_cates[t] for t in types])  # (n, k)
+        best_idx       = matrix.argmax(axis=1)
+        best_treatment = np.array([types[i] for i in best_idx])
+        best_cate      = matrix[np.arange(len(best_idx)), best_idx]
+        return best_treatment, best_cate
+
+    def predict_uplift(self, X):
+        """Return best CATE across arms — compatible with single-treatment serving pipeline."""
+        _, best_cate = self.predict_best_treatment(X)
+        return best_cate
+
+    def predict_control_proba(self, X):
+        """P(Y=1 | X, no treatment) — arm features set to 0."""
+        return self.base_model.predict_control_proba(self._add_arm_features(X, arm=None))
+
+    @property
+    def n_features_(self):
+        return len(self.feature_names_) if self.feature_names_ else self.base_model.n_features_
+
+
 def _with_names(model, features):
     """Remember the exact feature list/order the model was fitted on (serving verifies it)."""
     model.feature_names_ = list(features)
