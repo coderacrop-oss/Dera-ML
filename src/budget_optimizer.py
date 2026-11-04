@@ -6,9 +6,14 @@ profit subject to:
 
     sum(promo_cost_i  for i in selected) <= budget
 
-Algorithm: greedy bang-per-buck (expected_profit / promo_cost) ordering.
-  - Optimal for the fractional knapsack.
-  - Achieves (1 − 1/e) ≈ 63% approximation for the 0/1 knapsack.
+Algorithm: greedy bang-per-buck with single-item fallback.
+  - Sort approved customers by expected_profit / promo_cost (descending).
+  - Greedily add customers until budget is exhausted.
+  - Compare greedy total profit against the single highest-profit customer
+    that fits within budget; return whichever is larger.
+  - This max(greedy, best_single) comparison achieves a 1/2-approximation
+    guarantee for the 0/1 knapsack (Sahni 1975).
+  - Optimal for the fractional knapsack (pure greedy suffices there).
   - O(n log n) — fast enough for any realistic customer list.
 
 Typical usage
@@ -85,6 +90,19 @@ def select_within_budget(
     approved["budget_rank"]     = range(1, len(approved) + 1)
     approved["cumulative_cost"] = approved[cost_col].cumsum().round(2)
     approved["selected_for_budget"] = approved["cumulative_cost"] <= budget
+
+    # 1/2-approximation: compare greedy set to the single highest-profit customer
+    # that fits within budget (Sahni 1975).  Replace greedy if best-single wins.
+    greedy_profit = float(approved.loc[approved["selected_for_budget"], profit_col].sum())
+    fits_mask = approved[cost_col] <= budget
+    if fits_mask.any():
+        best_single_row = approved[fits_mask].loc[
+            approved[fits_mask][profit_col].idxmax()
+        ]
+        best_single_profit = float(best_single_row[profit_col])
+        if best_single_profit > greedy_profit:
+            approved["selected_for_budget"] = False
+            approved.loc[best_single_row.name, "selected_for_budget"] = True
 
     not_approved["bang_per_buck"]       = None
     not_approved["budget_rank"]         = None
