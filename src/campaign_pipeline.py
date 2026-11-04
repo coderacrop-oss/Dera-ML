@@ -764,7 +764,8 @@ def run_layer4(pos_file_path="data/transactions.csv",
                default_cogs=None,
                models_root=None,
                ctx=None,
-               campaign_budget=None):
+               campaign_budget=None,
+               promo_spec=None):
     """Serving: score every customer with the approved champion. Never trains, never writes the registry.
 
     Pass a pre-built Layer4Context as `ctx` to avoid re-running L0-L3 when the caller
@@ -777,6 +778,12 @@ def run_layer4(pos_file_path="data/transactions.csv",
         broadcast list is filtered via the greedy knapsack so that total
         promo_cost stays within this budget.  Pass None (default) to send to
         all CFO-approved customers without a budget constraint.
+    promo_spec : PromoSpec or None
+        Optional operator-planned promotion.  When provided, the Promo Advisor
+        runs after Layer 4 decisions and produces a merged broadcast list that
+        picks the higher-profit action per customer (ML vs operator promo).
+        Results saved to data/processed/promo_advisor_output.csv and
+        data/processed/promo_advisor_report.json.
     """
     print("=== กำลังประมวลผล Layer 4: Campaign Engine (Serving — ใช้ Champion ที่อนุมัติแล้ว) ===")
 
@@ -838,10 +845,57 @@ def run_layer4(pos_file_path="data/transactions.csv",
         ] = [0, "Do Nothing (Over Budget)"]
         print_budget_report(detail, campaign_budget)
 
+    # ── Promo Advisor (optional) ──────────────────────────────────────────────
+    _promo_report = None
+    if promo_spec is not None:
+        try:
+            from promo_advisor import promo_advisor, print_promo_report
+            _cogs  = getattr(ctx, "cogs_rate",  None) or 0.50
+            _floor = 0.15  # min_allowable_net_margin
+            _promo_df, _promo_report = promo_advisor(
+                ml_output=detail,
+                cust_agg=ctx.cust_agg,
+                spec=promo_spec,
+                cogs_rate=_cogs,
+                min_margin=_floor,
+                history_path="data/processed/promo_history.jsonl",
+            )
+            print_promo_report(_promo_report)
+            os.makedirs("data/processed", exist_ok=True)
+            _promo_df.to_csv("data/processed/promo_advisor_output.csv", index=False)
+            atomic_write_text(
+                "data/processed/promo_advisor_report.json",
+                json.dumps(_promo_report, indent=2, ensure_ascii=False),
+            )
+            # Replace detail with promo-advisor resolved output for final broadcast list
+            # Map final_should_send / final_action back to standard columns
+            _cols_map = {
+                "final_should_send": "should_send",
+                "final_action":      "recommended_action",
+                "final_profit":      "expected_profit",
+                "final_promo_cost":  "promo_cost",
+            }
+            for src, dst in _cols_map.items():
+                if src in _promo_df.columns:
+                    detail = detail.merge(
+                        _promo_df[["customer_id", src]].drop_duplicates("customer_id"),
+                        on="customer_id", how="left",
+                    )
+                    detail[dst] = detail[src].combine_first(detail[dst])
+                    detail.drop(columns=[src], inplace=True)
+            if "advisor_reason" in _promo_df.columns:
+                detail = detail.merge(
+                    _promo_df[["customer_id", "advisor_reason",
+                               "final_source", "conflict_type"]].drop_duplicates("customer_id"),
+                    on="customer_id", how="left",
+                )
+        except Exception as _pa_exc:
+            print(f"⚠️  [PromoAdvisor] ข้ามเพราะ: {_pa_exc}")
+
     total_cust = len(detail)
     print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า) โดย Champion {ref.version} [{ref.provenance}]:")
     for action, cnt in detail['recommended_action'].value_counts().items():
-        icon = "✅" if not action.startswith("Do Nothing") else "⛔"
+        icon = "✓" if not action.startswith("Do Nothing") else "✗"
         print(f"   {icon} {action:<45} {cnt:>5,} คน ({cnt / total_cust * 100:.1f}%)")
     print("-------------------------------------------------------")
 
