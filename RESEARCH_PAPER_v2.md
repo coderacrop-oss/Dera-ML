@@ -19,7 +19,7 @@ Two novel architectural contributions distinguish this version from the initial 
 
 These architectural changes raised the campaign send rate from **8.9% to 50.1%** on the production dessert restaurant dataset — a 5.6× improvement — while maintaining financial discipline: all send decisions remain subject to per-customer profit viability checks. The production Champion model (v7) is trained on a multi-store pool combining dessert restaurant transactions (proxy labels) with the Dunnhumby Complete Journey dataset (real causal labels), achieving Qini = 1.21 and a +3.56% gate improvement over the previous champion.
 
-The framework is evaluated on seven datasets: (1) a synthetic restaurant POS dataset (9,344 line items, 200 customers; silhouette = 0.679; k = 2; 0/200 broadcast — zero validates calibration on randomized treatment); (2) a public marketing campaign dataset (905 customers; silhouette = 0.306; k = 3; 338/905 broadcast, Δprofit = $9,224); (3) the Dunnhumby Complete Journey grocery dataset (2,500 households, 2,576,815 rows; silhouette = 0.595; k = 3; 72/2,500 broadcast, Δprofit = $3,207); (4) a UK online retail dataset (397,884 line items, 4,338 customers; silhouette = 0.931; k = 2; 19/4,338 broadcast, Δprofit = $2,529); (5) a purpose-built Layer 3 synthetic test dataset (500 customers; engineered demand-surge products; validates context detection stockout suppression — 23/500 customers correctly blocked from campaign dispatch on out-of-stock items); and (6) the Hillstrom MineThatData RCT (64,000 customers, three randomized arms), used to evaluate pooled multi-treatment uplift on true randomized labels — yielding Qini = 0.1215, AUUC = 0.0614, and ATE calibration error of 9% on the holdout; and (7) a production dessert restaurant POS dataset (dessert-ml.csv), used for Champion v7 training (multi-store pool with Dunnhumby), achieving Qini = 1.21 and +3.56% gate improvement. A consistent finding is that naive broadcast campaigns produce model-estimated incremental profit *worse than running no campaign at all*; the CFO Guardrail converts money-losing broadcast scenarios into net-positive outcomes. All profit figures are model-estimated projections on synthetic or public datasets. Results demonstrate robustness across F&B, grocery, and e-commerce contexts.
+The framework is evaluated on seven datasets: (1) a synthetic restaurant POS dataset (9,344 line items, 200 customers; silhouette = 0.679; k = 2; 0/200 broadcast — zero validates calibration on randomized treatment); (2) a public marketing campaign dataset (905 customers; silhouette = 0.306; k = 3; 338/905 broadcast, Δprofit = $9,224); (3) the Dunnhumby Complete Journey grocery dataset (2,500 households, 2,576,815 rows; silhouette = 0.595; k = 3; 72/2,500 broadcast, Δprofit = $3,207); (4) a UK online retail dataset (397,884 line items, 4,338 customers; silhouette = 0.931; k = 2; 19/4,338 broadcast, Δprofit = $2,529); (5) a purpose-built Layer 3 synthetic test dataset (500 customers; engineered demand-surge products; validates context detection stockout suppression — 23/500 customers correctly blocked from campaign dispatch on out-of-stock items); (6) the Hillstrom MineThatData RCT (64,000 customers, three randomized arms), used to evaluate pooled multi-treatment uplift on true randomized labels — yielding Qini = 0.1215, AUUC = 0.0614, and ATE calibration error of 9% on the holdout; and (7) a production dessert restaurant POS dataset (`dessert-ml.csv`, 2,409 customers, 27,767 rows, ~11 months), used for Champion v7 training (multi-dataset pool with Dunnhumby), achieving Qini = 1.21 and +3.56% gate improvement. A consistent finding is that naive broadcast campaigns produce model-estimated incremental profit *worse than running no campaign at all*; the CFO Guardrail converts money-losing broadcast scenarios into net-positive outcomes. All profit figures are model-estimated projections on synthetic or public datasets. Results demonstrate robustness across F&B, grocery, and e-commerce contexts.
 
 **Keywords:** MLOps, SME marketing, uplift modeling, X-learner, meta-learner, RFM segmentation, IBM segmentation, declarative action rules, campaign optimization, POS analytics, LightGBM, CFO guardrail, Champion-Challenger, rescue tiers, frequency trend
 
@@ -64,7 +64,7 @@ The primary contributions of this work are:
 - A **zero-cost notification pathway** for high-value customers (RFM decile ≥ 7, tier in {Champions, Loyal, Can't Lose Them, Potential Loyalist}) for whom no promotional offer clears the profit floor: a relationship message is dispatched at zero promo cost, reinforcing loyalty without margin impact (Section 4.4.4).
 - **Data-driven temporal context detection with context-aware promotional cost routing:** Layer 3 computes hourly transaction volume and sets peak-hour threshold = mean + 0.5×std, eliminating hardcoded peak-hour configuration. Layer 4 applies distinct promo cost rates per temporal context — 22% for Off-Peak customers (aggressive traffic driver during quiet periods) and 8% for Peak customers (light upsell when already visiting) — enabling financially optimized routing per customer's behavioral pattern (Section 4.3, 4.4.4).
 - **Campaign automation scheduler:** A production scheduler (`campaign_scheduler.py`) implements a 3-wave monthly deployment strategy with 5% A/B holdout control group, per-customer `send_datetime` derived from detected peak windows, and templated messaging per action type — bridging Layer 4 decision outputs to CRM execution (Section 4.6).
-- **Empirical evaluation** on six datasets (synthetic F&B, marketing campaign, Dunnhumby grocery, UK online retail, a purpose-built Layer 3 synthetic test dataset, and the Hillstrom MineThatData RCT), including ablation study, cross-dataset baseline comparison, and multi-seed stability analysis (Section 6). AUUC on randomized labels: T-learner = 0.0612, X-learner = 0.0475 — both near-zero as expected for null treatment effect, validating calibration. Prior T-learner AUUC of 0.2351 was inflated by proxy label bias (Section 6.10.1).
+- **Empirical evaluation** on seven datasets (synthetic F&B, marketing campaign, Dunnhumby grocery, UK online retail, a purpose-built Layer 3 synthetic test dataset, the Hillstrom MineThatData RCT, and a production dessert restaurant POS dataset), including ablation study, cross-dataset baseline comparison, and multi-seed stability analysis (Section 6). AUUC on randomized labels: T-learner = 0.0612, X-learner = 0.0475 — both near-zero as expected for null treatment effect, validating calibration. Prior T-learner AUUC of 0.2351 was inflated by proxy label bias (Section 6.10.1).
 - A **Champion-Challenger protocol** adapted for SME environments with limited historical data (Section 4.4.7). Champion v7 uses multi-store pooling (dessert store + Dunnhumby) achieving Qini = 1.21 and +3.56% gate improvement.
 - **Temporal-split proxy labels with leakage prevention (v1.15):** When no real treatment/response data exists, proxy labels are derived from transaction timestamps (temporal retention signal) with random treatment assignment, and model features are restricted to basket-level signals that do not overlap with label construction — eliminating the feature-label circularity present in earlier RFM-rank proxy designs (Section 4.4.1).
 - **Calibrated uplift probability estimates (v1.15):** Base learners μ₀ and μ₁ are wrapped with `CalibratedClassifierCV(isotonic, cv=3)`, reducing ECE by 87% (0.2496 → 0.0323) and producing reliable probability inputs to the CFO Guardrail profit formula (Section 4.4.1).
@@ -323,14 +323,14 @@ The feature sets differ between modes:
 
 | Feature | Proxy Mode | Real Label Mode |
 |---------|-----------|----------------|
-| `total_price` (AOV) | ✅ | ✅ |
-| `quantity` | ✅ | ✅ |
-| `is_campaign_spike` | ✅ | ✅ |
-| `rfm_decile_segment` | ❌ (excluded — leakage risk with temporal proxy) | ✅ |
-| `frequency` | ❌ (excluded — leakage risk with temporal proxy) | ✅ |
-| `income` | ❌ | ✅ |
-| `total_spend` | ❌ | ✅ |
-| `times_accepted` | ❌ | ✅ |
+| `total_price` (AOV) | ✓ | ✓ |
+| `quantity` | ✓ | ✓ |
+| `is_campaign_spike` | ✓ | ✓ |
+| `rfm_decile_segment` | ✗ (excluded — leakage risk with temporal proxy) | ✓ |
+| `frequency` | ✗ (excluded — leakage risk with temporal proxy) | ✓ |
+| `income` | ✗ | ✓ |
+| `total_spend` | ✗ | ✓ |
+| `times_accepted` | ✗ | ✓ |
 
 A 5% holdout control group is preserved in every deployment cycle for ongoing A/B measurement of realized incremental lift. As real promotion response data accumulates through partner deployments, operators automatically transition from proxy mode to real label mode without pipeline reconfiguration.
 
@@ -540,11 +540,11 @@ Model versioning follows a Champion-Challenger pattern. A challenger model (trai
 - Challenger expected profit exceeds Champion by ≥ 3% (growth gate), OR
 - Recession mode is active — defined as current mean spend < 65% of baseline — AND challenger `Do Nothing` rate exceeds 50%, indicating capital preservation is appropriate
 
-The gate report distinguishes three failure modes with plain-language explanations: (a) ~0% delta — same dataset re-run, no new signal; (b) large negative delta — likely cross-dataset distribution shift, actionable hint to reset Champion if dataset changed; (c) small positive delta below 3% threshold — genuine marginal improvement, hold. Each run prints a full action breakdown (✅/⛔ per decision type with counts and percentages) for operational transparency.
+The gate report distinguishes three failure modes with plain-language explanations: (a) ~0% delta — same dataset re-run, no new signal; (b) large negative delta — likely cross-dataset distribution shift, actionable hint to reset Champion if dataset changed; (c) small positive delta below 3% threshold — genuine marginal improvement, hold. Each run prints a full action breakdown (✓/✗ per decision type with counts and percentages) for operational transparency.
 
 Both champion and challenger models are serialized with timestamps and retained in an archive for full reproducibility and rollback capability.
 
-**Champion v7 (current production, promoted November 2026):** The production champion is trained on a multi-store data pool combining the dessert restaurant dataset (proxy labels — temporal-split retention signal) with the Dunnhumby Complete Journey dataset (real causal labels — 1,584 treated / 916 control households). This multi-store pooling strategy addresses a critical limitation of single-store training: treatment rates of 88–92% across both dessert store arms produce a small control group, limiting causal signal. Dunnhumby's natural treatment/control split (63.4% treated) provides the structural variation needed to train reliable CATE estimators.
+**Champion v7 (current production, promoted November 2026):** The production champion is trained on a data pool combining the dessert restaurant dataset (`dessert-ml.csv`, real `is_treated` labels — 1,702 treated / 707 control, 70.7% treatment rate) with the Dunnhumby Complete Journey dataset (real causal labels — 1,584 treated / 916 control households). This multi-dataset pooling strategy addresses a critical limitation of single-dataset training: the dessert-ml.csv dataset's high treatment rate (70.7%) produces a relatively small control group (707 customers), limiting causal signal. Dunnhumby's natural treatment/control split (63.4% treated) provides additional structural variation to improve CATE estimation.
 
 | Metric | v7 Value |
 |--------|----------|
@@ -556,7 +556,7 @@ Both champion and challenger models are serialized with timestamps and retained 
 
 The gate comparison uses expected profit delta between champion and challenger on the serving dataset — not AUUC or ATE. The +3.56% profit improvement reflects v7's superior action-level discrimination: it identifies more customers in rescue tiers and high-value segments who warrant loyalty actions, increasing send rate from 39.7% to 50.1%. Negative AUUC on this evaluation reflects the high treatment rate (88–92%) producing a small control group — AUUC is unreliable when control group N is <15% of total. The gate correctly promotes v7 based on realized profit improvement, independent of AUUC.
 
-*Note:* The 247% ATE calibration error (predicted −0.085 vs actual +0.057) reflects the high treatment rate (88–92%) producing a small control group — a known limitation in first-deployment SME contexts without established holdout infrastructure. The rescue tier mechanism and _viable_loyalty viability check compensate at the action-selection level: for the 83.9% of customers with negative predicted uplift, rescue and loyalty logic routes them to relationship actions that do not require incremental proof. As real response data accumulates from live deployments, ATE calibration is expected to improve through natural retraining cycles.
+*Note:* The 247% ATE calibration error (predicted −0.085 vs actual +0.057) reflects the high treatment rate (70.7%) producing a relatively small control group (707 of 2,409 customers) — a known limitation in first-deployment SME contexts without established holdout infrastructure. The rescue tier mechanism and _viable_loyalty viability check compensate at the action-selection level: for the 83.9% of customers with negative predicted uplift, rescue and loyalty logic routes them to relationship actions that do not require incremental proof. As real response data accumulates from live deployments, ATE calibration is expected to improve through natural retraining cycles.
 
 **Send rate progression:** The architectural upgrades in this paper raised the campaign send rate on the production dessert restaurant dataset from 8.9% (original decision engine, v6) to 50.1% (v7 champion with IBM segmentation, rescue tiers, and zero-cost notification) — a 5.6× improvement while maintaining financial discipline. Each stage contributed:
 
@@ -667,7 +667,7 @@ Message templates are pre-rendered per action type and truncated to channel-spec
 
 ### 5.1 Datasets
 
-Six datasets were used to evaluate the framework across complementary dimensions: synthetic F&B for methodology validation; a public marketing campaign dataset; a large-scale real-world grocery dataset; a UK e-commerce dataset; a purpose-built Layer 3 synthetic test; and the Hillstrom MineThatData RCT for multi-treatment uplift evaluation on true randomized labels.
+Seven datasets were used to evaluate the framework across complementary dimensions: synthetic F&B for methodology validation; a public marketing campaign dataset; a large-scale real-world grocery dataset; a UK e-commerce dataset; a purpose-built Layer 3 synthetic test; the Hillstrom MineThatData RCT for multi-treatment uplift evaluation on true randomized labels; and a production dessert restaurant POS dataset supplying the Champion v7 production model.
 
 **Dataset 1 — Synthetic Restaurant POS Dataset**
 
@@ -713,7 +713,11 @@ This dataset is used exclusively for pooled multi-treatment uplift training and 
 
 **Dataset 7 — Dessert Restaurant POS Dataset (Production)**
 
-A real-world production POS dataset from a Thai dessert restaurant (referred to as `dessert-ml.csv`), containing transaction-level records from repeat customers. This dataset serves as the primary production training corpus for Champion v7, combined with the Dunnhumby Complete Journey dataset in a multi-store pooling strategy. The dessert-ml.csv dataset uses proxy treatment labels (temporal-split design: `converted = retention in final 25% of observation window`; random treatment assignment to avoid RFM-feature circularity). Unlike Dataset 1 (which is synthetically generated for methodology validation), this dataset represents genuine SME POS exports — the pipeline's direct target deployment context. The Champion v7 model trained on this multi-store pool achieves Qini = 1.21 and a +3.56% gate improvement over the previous champion, with a send rate of 50.1% (up from 8.9% on the prior architecture). This dataset is not evaluated for AUUC (proxy labels preclude causal interpretation) and does not appear in the cross-dataset baseline table (Section 6.6); its role is to supply the production champion for send-rate and financial reporting.
+A real-world production POS dataset from a Thai dessert restaurant (referred to as `dessert-ml.csv`), containing transaction-level records from 2,409 unique customers across 27,767 transaction rows, spanning November 2025 to September 2026 (~11 months, single store). Unlike Dataset 1 (synthetically generated for methodology validation), this dataset represents genuine SME POS exports — the pipeline's direct target deployment context.
+
+The dataset includes real treatment labels (`is_treated`, `post_promo_visit`) from actual promotional campaigns, with 1,702 treated customers (70.7%) and 707 control customers (29.3%). The high treatment rate is a characteristic of first-deployment SME contexts where operators have historically sent promotions broadly. This imbalanced treatment/control split is the primary motivation for the multi-dataset pooling strategy used in Champion v7: Dunnhumby's 63.4%/36.6% split supplements the signal from the smaller dessert-ml.csv control group.
+
+This dataset is used in real label mode (not proxy mode) for Champion v7 training. It is not evaluated for AUUC (the high treatment rate and observational label structure preclude causal interpretation) and does not appear in the cross-dataset baseline table (Section 6.6). Its role is to supply the production POS context for send-rate and financial reporting. The Champion v7 model trained on the combined pool achieves Qini = 1.21 and a +3.56% gate improvement over the previous champion, with a send rate of 50.1% (up from 8.9% on the prior architecture).
 
 ### 5.2 Stress Test Scenarios
 
@@ -765,10 +769,10 @@ The full Layer 4 decision breakdown across all 200 customers is:
 
 | Decision | Customers | % |
 |---|---|---|
-| ⛔ Do Nothing (Negative Uplift Guard) | 89 | 44.5% |
-| ⛔ Do Nothing (CFO Guardrail) | 82 | 41.0% |
-| ⛔ Do Nothing (Out of Stock) | 17 | 8.5% |
-| ⛔ Do Nothing (Low Basket Size) | 12 | 6.0% |
+| ✗ Do Nothing (Negative Uplift Guard) | 89 | 44.5% |
+| ✗ Do Nothing (CFO Guardrail) | 82 | 41.0% |
+| ✗ Do Nothing (Out of Stock) | 17 | 8.5% |
+| ✗ Do Nothing (Low Basket Size) | 12 | 6.0% |
 | **Total broadcast (should\_send = 1)** | **0** | **0%** |
 
 The Champions segment, representing 15% of customers, generates a net profit per head of ฿1,522 — 9.2× higher than the At-Risk segment — despite being a small minority. This ratio is consistent with Pareto dynamics commonly observed in F&B loyalty programs, where repeat high-frequency customers disproportionately drive profitability.
@@ -794,13 +798,13 @@ The full Layer 4 decision breakdown across all 905 customers is:
 
 | Decision | Customers | % |
 |---|---|---|
-| ⛔ Do Nothing (CFO Guardrail) | 281 | 31.0% |
-| ⛔ Do Nothing (Negative Uplift Guard) | 197 | 21.8% |
-| ✅ Push Promotion: Bundle | 178 | 19.7% |
-| ⛔ Do Nothing (Low Basket Size) | 89 | 9.8% |
-| ✅ Off-Peak Special | 82 | 9.1% |
-| ✅ VIP Early Access | 76 | 8.4% |
-| ✅ VIP Reward | 2 | 0.2% |
+| ✗ Do Nothing (CFO Guardrail) | 281 | 31.0% |
+| ✗ Do Nothing (Negative Uplift Guard) | 197 | 21.8% |
+| ✓ Push Promotion: Bundle | 178 | 19.7% |
+| ✗ Do Nothing (Low Basket Size) | 89 | 9.8% |
+| ✓ Off-Peak Special | 82 | 9.1% |
+| ✓ VIP Early Access | 76 | 8.4% |
+| ✓ VIP Reward | 2 | 0.2% |
 | **Total broadcast (should\_send = 1)** | **338** | **37.4%** |
 
 The silhouette score (0.306) reflects the aggregate-level nature of the marketing campaign data, which produces less geometrically distinct RFM clusters than transaction-level POS data. The pipeline correctly adapts to k = 3, demonstrating that dynamic cluster selection prevents artificial fragmentation. Champions AOV of $1,323 is the highest single-segment AOV across this dataset. This dataset now correctly uses the companion `marketing_campaign.csv` file labels (`AcceptedCmp1`–`AcceptedCmp5` + `Response`) — a reproducibility bug fix that corrects the label source from an RFM proxy to the actual campaign acceptance records. Uplift estimates reflect self-selection rather than randomized assignment and should be interpreted as directional signals rather than causal effects (see Section 4.4.1 caveat). Adaptive basket thresholds activate (P10 = $7.17, P50 = $74.83).
@@ -828,13 +832,13 @@ The full Layer 4 decision breakdown across all 2,500 customers (X-learner, n\_es
 
 | Decision | Customers | % |
 |----------|-----------|---|
-| ⛔ Do Nothing (Negative Uplift Guard) | 1,431 | 57.2% |
-| ⛔ Do Nothing (Out of Stock) | 496 | 19.8% |
-| ⛔ Do Nothing (CFO Guardrail) | 296 | 11.8% |
-| ⛔ Do Nothing (Low Basket Size) | 205 | 8.2% |
-| ✅ Off-Peak Special | 12 | 0.5% |
-| ✅ Push Promotion: Bundle | 7 | 0.3% |
-| ✅ Additional actions | 53 | 2.1% |
+| ✗ Do Nothing (Negative Uplift Guard) | 1,431 | 57.2% |
+| ✗ Do Nothing (Out of Stock) | 496 | 19.8% |
+| ✗ Do Nothing (CFO Guardrail) | 296 | 11.8% |
+| ✗ Do Nothing (Low Basket Size) | 205 | 8.2% |
+| ✓ Off-Peak Special | 12 | 0.5% |
+| ✓ Push Promotion: Bundle | 7 | 0.3% |
+| ✓ Additional actions | 53 | 2.1% |
 | **Total broadcast (should\_send = 1)** | **72** | **2.9%** |
 
 The Negative Uplift Guard now dominates suppression at 57.2% (1,431 customers), consistent with real Dunnhumby campaign labels where the majority of households — especially high-frequency buyers — are correctly identified as purchasing regardless of campaign contact. The key finding is in the Champions segment: 63/506 Champions are approved for broadcast because the real `campaign_table` data shows these specific households exhibited genuine incremental response when targeted by campaigns. The remaining 443/506 Champions are suppressed as purchasing regardless. Most strikingly, Potential Loyalists are suppressed at 99.5% (9/1,923 approved) — the real campaign data reveals that the vast majority of mid-tier grocery shoppers in this dataset purchase irrespective of campaign contact, making campaign spend wasteful for this segment. This pattern aligns with the Dunnhumby data's structure: households engaged enough to be captured in `campaign_table` are already high-propensity buyers.
@@ -862,13 +866,13 @@ The Layer 4 decision breakdown across all 4,338 customers (X-learner, n\_estimat
 
 | Decision | Customers | % |
 |----------|-----------|---|
-| ⛔ Do Nothing (CFO Guardrail) | 2,933 | 67.6% |
-| ⛔ Do Nothing (Negative Uplift Guard) | 854 | 19.7% |
-| ⛔ Do Nothing (Low Basket Size) | 433 | 10.0% |
-| ⛔ Do Nothing (Out of Stock) | 99 | 2.3% |
-| ✅ Off-Peak VIP Points | 11 | 0.3% |
-| ✅ Push Promotion: Bundle | 6 | 0.1% |
-| ✅ VIP Reward | 2 | 0.05% |
+| ✗ Do Nothing (CFO Guardrail) | 2,933 | 67.6% |
+| ✗ Do Nothing (Negative Uplift Guard) | 854 | 19.7% |
+| ✗ Do Nothing (Low Basket Size) | 433 | 10.0% |
+| ✗ Do Nothing (Out of Stock) | 99 | 2.3% |
+| ✓ Off-Peak VIP Points | 11 | 0.3% |
+| ✓ Push Promotion: Bundle | 6 | 0.1% |
+| ✓ VIP Reward | 2 | 0.05% |
 | **Total broadcast (should\_send = 1)** | **19** | **0.4%** |
 
 *Note: results updated in v1.14 following the proxy label fix described in Section 4.4.1. Prior figures (63/4,338, $40,630) were computed under RFM proxy labels with feature leakage; corrected temporal-split proxy yields 19/4,338 and $2,529.*
@@ -914,11 +918,11 @@ The `in_stock = False` signal propagates from Layer 3 to Layer 4's decision rule
 
 | Decision | Customers | % |
 |---|---|---|
-| ⛔ Do Nothing (Negative Uplift Guard) | 230 | 46.0% |
-| ✅ Push Promotion: Bundle | 151 | 30.2% |
-| ⛔ Do Nothing (Low Basket Size) | 49 | 9.8% |
-| ✅ Off-Peak Special | 47 | 9.4% |
-| ⛔ **Do Nothing (Out of Stock)** | **23** | **4.6%** |
+| ✗ Do Nothing (Negative Uplift Guard) | 230 | 46.0% |
+| ✓ Push Promotion: Bundle | 151 | 30.2% |
+| ✗ Do Nothing (Low Basket Size) | 49 | 9.8% |
+| ✓ Off-Peak Special | 47 | 9.4% |
+| ✗ **Do Nothing (Out of Stock)** | **23** | **4.6%** |
 | **Total broadcast (should\_send = 1)** | **198** | **39.6%** |
 
 The 23 Out of Stock blocks directly reflect customers whose top-spend product is among the three engineered stockout items — confirming the end-to-end data flow from Layer 3's `in_stock` flag through Layer 4's decision rule to the final broadcast list. Without Layer 3, these 23 customers would have been incorrectly dispatched campaigns for items unavailable for fulfillment.
@@ -927,11 +931,13 @@ The 23 Out of Stock blocks directly reflect customers whose top-spend product is
 
 ```
 🔬 [X-learner] treated=3,851, control=2,153, features=5, n_estimators=200
-✅ Training complete (mu0, mu1, tau0, tau1, propensity)
+✓ Training complete (mu0, mu1, tau0, tau1, propensity)
 🟢 GATE PASSED — Champion saved (X-learner, n_estimators=200)
 ```
 
-The X-learner trained successfully with the RFM proxy label mode (no separate promo file), producing a meaningful treatment/control split from the dataset's 39.2% treatment rate.
+*Note: The counts `treated=3,851, control=2,153` shown in the training log are **row-level** (transaction line counts), not customer counts. At the customer level, 196 of 500 customers (39.2%) were assigned to the treatment group, with the remaining 304 as control — consistent with the temporal-split proxy design. The log reports row counts because the X-learner trains on individual transaction rows with the customer-level treatment assignment replicated per row.*
+
+The X-learner trained successfully with the **temporal-split proxy label mode** (no separate promo response file; treatment assignment derived from seeded random assignment; `converted = retention in final 25% of observation window`). The 39.2% customer-level treatment rate and the directional uplift signal (treated conversion 56.1% vs control 38.5%) are characteristics of the dataset's engineered label design.
 
 **Interpretation:** This evaluation demonstrates that Layer 3's no-effect finding on Datasets 1–4 was a *dataset limitation* — not an architectural limitation. All four public datasets lacked the temporal demand variation needed to trigger the velocity-based stock depletion formula. On Dataset 5, with engineered demand surges, Layer 3 operates as designed, correctly protecting 23 customers from receiving promotions for out-of-stock items. In production deployments with real POS streams and genuine demand spikes, Layer 3's contribution is expected to be material.
 
@@ -997,12 +1003,12 @@ The 100% suppression rate on this synthetic dataset is a validation result, not 
 
 | Scenario | Pipeline Status | Measured Outcome | Criterion Met? |
 |----------|-----------------|-----------------|----------------|
-| `mega_sale` | ✅ Pass | Spike flag rate = 100% of spike transactions | ≥ 80% ✓ |
-| `recession` | ✅ Pass | Recession mode activates; Do Nothing rate = 87% | ≥ 50% ✓ |
-| `bulk_shift` | ✅ Pass | IQR removes outliers; centroid shift < 8% | < 20% ✓ |
-| `cold_start` | ✅ Pass | k = 2 fallback; 1+ campaign actions produced | ≥ 1 ✓ |
-| `off_peak` | ✅ Pass | Off-peak context flag rate = 72% | > 60% ✓ |
-| `data_noise` | ✅ Pass | 0 unhandled exceptions; 2.1% rows dropped | 0 exc, < 5% ✓ |
+| `mega_sale` | ✓ Pass | Spike flag rate = 100% of spike transactions | ≥ 80% ✓ |
+| `recession` | ✓ Pass | Recession mode activates; Do Nothing rate = 87% | ≥ 50% ✓ |
+| `bulk_shift` | ✓ Pass | IQR removes outliers; centroid shift < 8% | < 20% ✓ |
+| `cold_start` | ✓ Pass | k = 2 fallback; 1+ campaign actions produced | ≥ 1 ✓ |
+| `off_peak` | ✓ Pass | Off-peak context flag rate = 72% | > 60% ✓ |
+| `data_noise` | ✓ Pass | 0 unhandled exceptions; 2.1% rows dropped | 0 exc, < 5% ✓ |
 
 **Stress test pass rate: 6/6 (100%) — all quantitative criteria met**
 
@@ -1030,27 +1036,21 @@ AUUC on a causally identified holdout (real A/B deployment) remains the most inf
 
 While AUUC measures the rank quality of an uplift model — whether higher-scored customers genuinely have higher incremental response — it does not directly quantify business value. A model with near-zero AUUC on null data correctly abstains from targeting; a model on real campaign data may produce strong AUUC yet still destroy value if promo costs exceed the incremental margin generated. The profit-weighted Qini bridges this gap by translating uplift scores into expected profit at every targeting depth.
 
-**Definition.** Customers are sorted by predicted uplift score in descending order. At each rank position *k*, cumulative expected profit is:
+**Definition.** Customers are sorted by predicted uplift score in descending order. At each rank position *k*, cumulative expected margin contribution (before promo cost) is:
 
-$$\Pi(k) = \sum_{i=1}^{k} \bigl[\text{avg\_spent}_i \times (1 - \text{COGS}) \times \hat{\tau}_i \;-\; \text{avg\_spent}_i \times \text{promo\_cost}\bigr]$$
+$$\Pi(k) = \sum_{i=1}^{k} \text{avg\_spent}_i \times (1 - \text{COGS}) \times \hat{\tau}_i$$
 
-where $\hat{\tau}_i$ is the X-learner uplift score for customer *i*, COGS = 0.50, and promo\_cost = 0.15 (bundle rate) as configured in `business_config.py`. The **optimal targeting fraction** is the argmax of this cumulative profit curve:
+where $\hat{\tau}_i$ is the X-learner uplift score for customer *i* and COGS = 0.50. This quantity measures the **incremental gross margin** the model expects from targeting the top-*k* customers — it does not subtract promotional cost (which is accounted for separately by the CFO Guardrail at dispatch time). The curve's shape identifies which fraction of customers provides positive expected return on the margin side. The **optimal targeting fraction** is the point where the marginal contribution of adding one more customer turns negative — in practice, the point where the next customer's $\hat{\tau}_i$ falls below zero.
 
-$$k^* = \operatorname{arg\,max}_{k} \;\Pi(k)$$
+The profit-weighted Qini is **distinct from the CFO Guardrail's Δprofit check**: the Guardrail applies `avg_spent × (1-COGS) × τ̂ − promo_cost > 0` per customer and blocks those where promo cost exceeds incremental margin. The Qini curve above measures cumulative margin contribution only, providing a rank-quality diagnostic independent of the specific promo cost rate.
 
-Targeting the top $k^*/n$ fraction of customers by uplift score maximises expected ROI; dispatching beyond this point adds customers whose promo cost exceeds their incremental margin contribution.
+**Dataset 1 — Synthetic Restaurant (200 customers, X-learner with randomized labels):**
 
-**Dataset 1 results** (200-customer synthetic restaurant, X-learner with randomized labels):
+On this dataset, the X-learner assigns positive but near-zero uplift scores to nearly all customers (consistent with AUUC = 0.0475). The cumulative margin curve Π(k) is therefore monotonically non-decreasing — no customer has a negative estimated uplift — and no interior optimum exists. This confirms that the profit-weighted Qini does not identify a targeting cutoff on null-treatment data; its value as a tool emerges on datasets with genuine heterogeneous treatment effects, where some customers have τ̂ < 0 and the curve peaks before 100%.
 
-| Metric | Value |
-|--------|-------|
-| Optimal targeting fraction | 100.0% of customers |
-| Cumulative profit at optimal cutoff | ฿10,940.46 |
-| Cumulative profit at 100% broadcast | ฿10,940.46 |
+The 0 broadcast result from the full pipeline (Section 6.1) is consistent with this: the CFO Guardrail applies the stricter `τ̂ × gross_margin − promo_cost > 0` check, which all customers fail when τ̂ ≈ 0 and promo_cost > 0. The two calculations are complementary — the Qini curve diagnoses rank quality; the Guardrail enforces the financial dispatch constraint.
 
-The optimal fraction equals 100% because, on randomized synthetic data, every customer's estimated uplift score is positive (the X-learner assigns non-negative scores even under null treatment effect), so the cumulative profit curve is monotonically non-decreasing. This is consistent with — and explained by — the near-zero AUUC of 0.0475: the model distributes scores narrowly around zero incremental effect, and no sub-population is estimated to destroy value under the bundle promo cost. The profit-weighted Qini therefore does not identify a strict interior optimum on this dataset; its value lies in the comparison to broadcast-all, which here coincides with the optimum.
-
-*Clarification: The ฿10,940 figure above represents expected profit from the model-scored ordering under the profit-weighted Qini calculation — it is a projection based on uplift-weighted margins, not actual dispatched campaigns. The actual pipeline produces 0 broadcast (Section 6.1) because the CFO Guardrail applies a stricter per-customer incremental profit criterion (Δprofit > 0 individually) that every customer fails under null treatment effects. The "100% broadcast" row in the profit-weighted Qini is the full-population projection under the scoring formula — it is a different calculation from the dispatch decision. These two results are consistent: the Qini measures expected model value under a scoring interpretation; the dispatch decision applies a hard constraint.*
+*Implementation note: The profit-weighted Qini curve has been defined and the formula implemented in `budget_optimizer.py` via the `bang_per_buck` ordering. Numerical Dataset 1 results from a standalone Qini-curve computation script are not available in the current codebase; the figures reported in an earlier draft were produced by a script that has since been removed. Full profit-weighted Qini curve plots will be reported in the forthcoming field study evaluation.*
 
 **Business interpretation.** In a live deployment on data with genuine treatment heterogeneity, the profit-weighted Qini curve will peak at an interior fraction strictly less than 100%, identifying the precise cutoff above which additional targeting is ROI-negative. Targeting the top $k^*$% by uplift score rather than broadcasting to all customers or relying on RFM rank alone is the mechanism by which the pipeline produces the per-dataset Δprofit improvements reported in Section 6.10.3. This optimal fraction directly informs **Layer 4's dispatch threshold**: the pipeline suppresses campaigns for customers ranked below $k^*$, ensuring that only customers for whom expected incremental profit is positive after promo cost deduction receive an offer. When the forthcoming field study provides causally identified A/B labels, the profit-weighted Qini will serve as the primary business-value metric for model selection and threshold calibration.
 
@@ -1163,7 +1163,7 @@ Zero variance across seeds indicates deterministic convergence: LightGBM with n\
 
 #### 6.10.6 R-Learner Results on X5 RetailHero
 
-The R-learner (implemented as CausalForestDML from EconML, based on the causal forest framework of Athey & Imbens [32]) was evaluated on a 50,000-customer stratified sample drawn from the full 200,039-client X5 dataset to confirm that the pipeline produces a positive uplift signal on real, causally identified data. The 50K sample preserves the 50/50 treatment/control balance and the observed +3.32 pp population ATE.
+The R-learner (implemented as CausalForestDML from EconML, based on the random forest causal inference framework of Wager & Athey [32]) was evaluated on a 50,000-customer stratified sample drawn from the full 200,039-client X5 dataset to confirm that the pipeline produces a positive uplift signal on real, causally identified data. The 50K sample preserves the 50/50 treatment/control balance and the observed +3.32 pp population ATE.
 
 **Results table:**
 
@@ -1200,7 +1200,7 @@ The pipeline was evaluated on the MineThatData Hillstrom email campaign dataset 
 | Ensemble (R+DR softmax) | Hillstrom | 18 engineered | +0.0028 | Near-equal weights (0.50/0.50) |
 | Random baseline | Hillstrom | — | ~0.0000 | Corrected formula (67/33 split) |
 
-*Note: The AUUC values above (0.0022, 0.0032, 0.0028) are from the SOTA models (CausalForestDML, DR-Learner) evaluated in this section. These differ substantially from the pooled X-learner AUUC of 0.0614 reported in Section 6.11. Three factors explain the gap: (1) **Evaluation split**: the SOTA models here are evaluated on the full 64K Hillstrom population without a strict stratified train/holdout split, whereas Section 6.11 evaluates the pooled X-learner on a 20% stratified holdout (12,800 customers); (2) **Model conservatism**: EconML's doubly-robust and causal forest estimators apply stronger regularization and propensity clipping that tends to produce CATE distributions concentrated near zero — which minimizes AUUC — while LightGBM-based meta-learners produce wider score distributions that allow sharper customer ranking; (3) **Treatment encoding**: the SOTA models in this section treat the problem as binary (any email vs. no email, 67/33 split), while Section 6.11's pooled X-learner adds two arm-identity features, giving the model richer signal for ranking. The two sections are not directly comparable and should be interpreted as evaluating different modeling approaches under different conditions — not as measuring the same quantity.*
+*Note: The AUUC values above (0.0022, 0.0032, 0.0028) are from the SOTA models (CausalForestDML, DR-Learner) evaluated in this section. These differ substantially from the pooled X-learner AUUC of 0.0614 reported in Section 6.11. The gap is not fully explained — a controlled comparison on a shared holdout split has not been conducted. Two structural differences likely contribute: (1) **Model architecture and regularization**: EconML's doubly-robust and causal forest estimators apply orthogonal moment conditions and forest-level regularization that shrink individual CATE estimates toward zero, producing narrow score distributions and lower rank-discrimination ability; LightGBM-based meta-learners can fit more flexible response surfaces and produce wider score spreads, increasing AUUC. (2) **Treatment encoding**: the SOTA models here treat the problem as binary (any email vs. no email), while Section 6.11's pooled X-learner adds two arm-identity features, potentially giving the model richer signal for ranking customers by treatment response. The definitive comparison — evaluating all models on the identical 12,800-customer holdout — is left for future work.*
 
 The DR-Learner achieves the highest AUUC at +0.0032, edging out the R-Learner (+0.0022). The ensemble using softmax-weighted combination of R-Learner and DR-Learner predictions yields +0.0028 with weights converging to near-equal (0.50/0.50), indicating that both base learners capture complementary heterogeneity patterns. The absolute AUUC values are small but directionally correct and above random. This magnitude is expected given the dataset characteristics: population ATE is approximately +6.2 pp, and the SOTA AUUC values here reflect the SOTA models' ability to rank customers by HTE on this dataset.
 
@@ -1218,6 +1218,8 @@ The `PooledMultiTreatmentModel` (Section 4.4.10) was trained on the Hillstrom Da
 | Treated — mens email | 17,045 | 18.4% |
 | Treated — womens email | 17,110 | 15.2% |
 | Treated (all) | 34,155 | 16.8% |
+
+*Note: The equal training counts for control (17,045) and mens email (17,045) reflect the near-identical arm sizes in the original dataset (21,306 control vs 21,307 mens email) — both round to 17,045 at 80% stratified sampling. This is not a copy-paste error; the difference in the full dataset is 1 customer.*
 
 **Holdout evaluation (12,800 customers, 20% stratified holdout):**
 
@@ -1402,11 +1404,11 @@ The forthcoming MVP field study with the CRM-integrated POS partner — incorpor
 
 This paper presented the ML Campaign Engine, a five-layer MLOps pipeline that enables small and medium enterprises in retail and food service to generate financially validated, per-customer campaign recommendations from standard POS transaction exports. The system requires no dedicated data science expertise, no additional data infrastructure beyond an existing POS system, and produces outputs in plain-language executive summary format suitable for direct operator consumption.
 
-The dual-gate CFO Guardrail — enforcing a net margin floor and a per-customer incremental profit check at inference time — extends prior work on profit-driven uplift modeling [27, 28] by implementing financial validation as a hard, config-driven constraint embedded in the ML decision loop, eliminating the manual organizational review step typical of conventional deployments. Full-pipeline comparison demonstrates that the CFO Guardrail is the primary mechanism preventing money-losing campaigns: on Dunnhumby, the X-learner pipeline produces $3,207 in incremental Δprofit against a broadcast-all baseline of −$262 — a +$3,469 swing. Ablation analysis (Section 6.10.4) further confirms that removing the guardrail on Dataset 1 produces −฿533 in money-losing campaigns that the guardrail correctly prevents.
+The dual-gate CFO Guardrail — enforcing a net margin floor and a per-customer incremental profit check at inference time — extends prior work on profit-driven uplift modeling [27, 28] by implementing financial validation as a hard, config-driven constraint embedded in the ML decision loop, eliminating the manual organizational review step typical of conventional deployments. Pipeline comparisons and ablation analysis are consistent with the CFO Guardrail being a key mechanism preventing money-losing campaigns: on Dunnhumby, the X-learner pipeline produces $3,207 in incremental Δprofit against a broadcast-all baseline of −$262 — a +$3,469 swing consistent with the guardrail suppressing negative-ROI campaigns. Ablation analysis (Section 6.10.4) further confirms that removing the guardrail on Dataset 1 produces −฿533 in money-losing campaigns that the guardrail correctly prevents.
 
 The uplift model has been upgraded from the T-learner baseline (prior reported AUUC = 0.2351 on Dataset 1 was inflated by proxy label bias; corrected value on randomized labels = 0.0612; X-learner AUUC on randomized labels = 0.0475) to an X-learner meta-learner (Künzel et al. 2019, n\_estimators = 200), which trains five LightGBM models through a two-stage imputation procedure that better handles the treatment/control group imbalance typical of SME deployments. Additionally, a purpose-built Layer 3 synthetic test dataset (Dataset 5, 500 customers) validates the context detection layer's stockout suppression: all three engineered demand-surge products are correctly flagged out-of-stock, and 23 customers (4.6%) are blocked from campaign dispatch — confirming that the previously-reported zero Layer 3 effect was a dataset limitation and not an architectural one.
 
-Evaluation across six datasets confirms context-appropriate behavior and a consistent scaling pattern. The synthetic restaurant dataset (200 customers) yields k = 2 with silhouette = 0.679, X-learner AUUC = 0.0475 on correctly randomized labels (near-zero as expected; T-learner AUUC = 0.0612 — both corrected from prior inflated proxy-label value of 0.2351; see Section 6.10.1). The T-learner under proxy labels marginally outperforms naive broadcast (+0.3%, ฿2,162 vs ฿2,109), but this figure uses proxy labels and is not causally interpretable. The Dunnhumby grocery dataset (2,500 customers) yields k = 3 with silhouette = 0.595. With the X-learner uplift model, the full pipeline outperforms broadcast-all by +1,325% in model-estimated incremental profit ($3,207 vs −$262.05, 72/2,500 broadcast). Notably, X-learner approves 63/506 Champions based on genuine incremental response signal from real campaign data, while suppressing the remaining 443/506 Champions as purchasing regardless of promotions — concentrating broadcast on those with genuine incremental response. The UK Online Retail dataset (4,338 customers) yields k = 2 with silhouette = 0.931. Under temporal-split proxy labels (corrected from RFM proxy with feature leakage), the X-learner pipeline approves 19 customers for broadcast (Δprofit = $2,529). Under synthetic treatment labels (post-hoc), 3,581 customers are approved (Δprofit = $55,324) — the ~188× range validates that label fidelity is the primary driver of broadcast volume rather than architectural conservatism. Dynamic cluster selection correctly adapts across all data structures. All six stress-test scenarios pass quantitative criteria. The scaling pattern — pipeline advantage grows from +0.3% at n=200 (T-learner baseline; the X-learner produces 0 broadcast on correctly randomized labels, validating calibration) to +1,325% at n=2,500 — is consistent with the hypothesis that guardrail value compounds as the fraction of near-zero-uplift customers increases. All profit figures are model-estimated projections; causal validation requires the forthcoming real-world field study.
+Evaluation across seven datasets confirms context-appropriate behavior and a consistent scaling pattern. The synthetic restaurant dataset (200 customers) yields k = 2 with silhouette = 0.679, X-learner AUUC = 0.0475 on correctly randomized labels (near-zero as expected; T-learner AUUC = 0.0612 — both corrected from prior inflated proxy-label value of 0.2351; see Section 6.10.1). The T-learner under proxy labels marginally outperforms naive broadcast (+0.3%, ฿2,162 vs ฿2,109), but this figure uses proxy labels and is not causally interpretable. The Dunnhumby grocery dataset (2,500 customers) yields k = 3 with silhouette = 0.595. With the X-learner uplift model, the full pipeline outperforms broadcast-all by +1,325% in model-estimated incremental profit ($3,207 vs −$262.05, 72/2,500 broadcast). Notably, X-learner approves 63/506 Champions based on genuine incremental response signal from real campaign data, while suppressing the remaining 443/506 Champions as purchasing regardless of promotions — concentrating broadcast on those with genuine incremental response. The UK Online Retail dataset (4,338 customers) yields k = 2 with silhouette = 0.931. Under temporal-split proxy labels (corrected from RFM proxy with feature leakage), the X-learner pipeline approves 19 customers for broadcast (Δprofit = $2,529). Under synthetic treatment labels (post-hoc), 3,581 customers are approved (Δprofit = $55,324) — the ~188× range validates that label fidelity is the primary driver of broadcast volume rather than architectural conservatism. Dynamic cluster selection correctly adapts across all data structures. All six stress-test scenarios pass quantitative criteria. The scaling pattern — pipeline advantage grows from +0.3% at n=200 (T-learner baseline; the X-learner produces 0 broadcast on correctly randomized labels, validating calibration) to +1,325% at n=2,500 — is consistent with the hypothesis that guardrail value compounds as the fraction of near-zero-uplift customers increases. All profit figures are model-estimated projections; causal validation requires the forthcoming real-world field study.
 
 Honest limitations include the small synthetic dataset, deterministic model convergence at n=200, and the absence of real pilot data. All profit figures reported in this paper are model-estimated projections on synthetic or public datasets — they represent the system's designed behavior under controlled conditions, not realized revenue outcomes from live campaigns.
 
@@ -1504,7 +1506,7 @@ The framework establishes a reproducible, extensible baseline for democratizing 
 
 [31] Dudík, M., Langford, J., & Li, L. (2011). Doubly robust policy evaluation and learning. In *Proceedings of the 28th International Conference on Machine Learning (ICML 2011)*, pp. 1097–1104.
 
-[32] Athey, S., & Imbens, G. W. (2016). Recursive partitioning for heterogeneous causal effects. *Proceedings of the National Academy of Sciences*, 113(27), 7353–7360. https://doi.org/10.1073/pnas.1510489113
+[32] Wager, S., & Athey, S. (2018). Estimation and inference of heterogeneous treatment effects using random forests. *Journal of the American Statistical Association*, 113(523), 1228–1242. https://doi.org/10.1080/01621459.2017.1319839
 
 ### Multi-Treatment RCT Dataset
 
