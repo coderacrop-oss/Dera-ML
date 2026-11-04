@@ -244,7 +244,7 @@ def _run_layer1(pos_file_path="data/raw_pos_transactions.csv"):
     X = scaler.fit_transform(X_log)
     # Business floor: >= 300 customers → min 3 segments (Champions / Mid / At-Risk at minimum)
     min_k = 3 if len(rfm) >= 300 else 2
-    max_k = min(5, len(rfm) - 1)
+    max_k = min(10, len(rfm) - 1)
     best_k, best_score = min_k, -1
     for k in range(min_k, max_k + 1):
         score = silhouette_score(X, KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X))
@@ -784,6 +784,22 @@ def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_
     )
     cust_agg['top_product'] = cust_agg['customer_id'].map(top_product_map).fillna('')
 
+    # ── Frequency trend: buying more or less recently? ───────────────────────
+    # Split window at midpoint; freq_trend = recent_half_count - early_half_count.
+    # Positive = rising (buying more often recently), Negative = declining.
+    _ts_all = pd.to_datetime(raw_df['timestamp'], errors='coerce')
+    _win_mid = _ts_all.min() + (_ts_all.max() - _ts_all.min()) / 2
+    _freq_early  = (raw_df[_ts_all <= _win_mid]
+                    .groupby('customer_id')['transaction_id'].count()
+                    .rename('_freq_early'))
+    _freq_recent = (raw_df[_ts_all >  _win_mid]
+                    .groupby('customer_id')['transaction_id'].count()
+                    .rename('_freq_recent'))
+    _freq_parts = _freq_early.to_frame().join(_freq_recent, how='outer').fillna(0)
+    _freq_parts['freq_trend'] = (_freq_parts['_freq_recent'] - _freq_parts['_freq_early']).astype(int)
+    cust_agg = cust_agg.merge(_freq_parts[['freq_trend']].reset_index(), on='customer_id', how='left')
+    cust_agg['freq_trend'] = cust_agg['freq_trend'].fillna(0).astype(int)
+
     # Resolve COGS source: per-product dict > default_cogs param > CONFIG
     _product_cogs = product_cogs_dict or {}
     _default_cogs = default_cogs if default_cogs is not None else CONFIG["cogs_rate"]
@@ -837,166 +853,79 @@ def build_action_menu(
     default_cogs: float = None,
     cluster_segment_name: str = "",
     bundle_name: str = "",
+    rescue: bool = False,
 ) -> tuple[str, float, str]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
     who passed Step 1 (persuadable or sure_thing).
 
-    Uses a 2D decision grid (cluster tier × uplift group):
-      - champions:   NO % discount ever → VIP bundle, loyalty points, early access
-      - at_risk:     Discount bundle first, then standard retention
-      - hibernating: Reactivation offer (bigger incentive)
-      - mid:         Upsell nudge, then standard
+    Rules are defined declaratively in src/action_rules.py.
 
-    Note: cluster_segment_name passed here enforces no-discount for champions
-    regardless of uplift group (see classify_uplift_group for group assignment).
+    Two strategies:
+      sure_thing   — SURE_THING_RULES evaluated in order; first profitable action wins.
+                     Loyalty-only menu (vip_points / early_access); no discounts.
+      persuadable  — PERSUADABLE_RULES: all matching viable rules collected; highest
+                     expected profit wins.
 
-    `bundle_name` uses the cluster's MBA-derived bundle; `top_bundle_name` is kept
-    as a fallback alias for backward compatibility.
-
-    All actions are pre-validated: expected_profit > 0 AND net_margin >= MIN_MARGIN.
     Returns (action_name, expected_profit, send_window).
-    Returns ("", baseline_profit, time_context) if no profitable action exists (rare edge case).
-
-    Sure Things: loyalty-only menu (vip_points, early_access) — no discount actions,
-    since they convert regardless and a discount would be margin cannibalization.
-    Persuadables: tier-specific menu ordered by ROI, best action wins.
+    Returns ("", baseline_profit, time_context) if no profitable action found.
     """
-    # Resolve bundle name: prefer cluster-specific, fall back to top_bundle_name
+    from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, cluster_tier, matches
+
     if not bundle_name:
         bundle_name = top_bundle_name
 
     PROMO_COST_RATES = CONFIG["promo_cost_rates"]
     MIN_MARGIN       = CONFIG["min_allowable_net_margin"]
-    high_uplift      = CONFIG["high_uplift_threshold"]
-    vip_rfm          = CONFIG["vip_rfm_threshold"]
-    spike_rfm        = CONFIG["spike_rfm_threshold"]
-    mid_rfm          = CONFIG["mid_rfm_threshold"]
 
-    is_off_peak  = (time_context == "Off-Peak")
-    send_window  = "Off-Peak Window" if is_off_peak else "Peak Window"
-    gross_margin = avg_spent * (1 - cogs)
-    p_baseline   = max(0.0, prob_control)
-    p_treated    = max(0.0, min(1.0, prob_control + uplift))
+    is_off_peak     = (time_context == "Off-Peak")
+    send_window     = "Off-Peak Window" if is_off_peak else "Peak Window"
+    gross_margin    = avg_spent * (1 - cogs)
+    p_baseline      = max(0.0, prob_control)
+    p_treated       = max(0.0, min(1.0, prob_control + uplift))
     baseline_profit = round(gross_margin * p_baseline, 2)
 
     def _viable(rate_key: str) -> tuple[bool, float]:
-        """Return (is_profitable, expected_profit) for a given promo cost rate key."""
-        cost_rate  = PROMO_COST_RATES[rate_key]
-        promo_cost = avg_spent * cost_rate
-        gross_rev  = avg_spent * (1 - CONFIG["default_discount_rate"])
-        net_profit = gross_rev - avg_spent * cogs - promo_cost
-        net_margin = net_profit / gross_rev if gross_rev > 0 else 0
+        cost_rate   = PROMO_COST_RATES[rate_key]
+        promo_cost  = avg_spent * cost_rate
+        gross_rev   = avg_spent * (1 - CONFIG["default_discount_rate"])
+        net_profit  = gross_rev - avg_spent * cogs - promo_cost
+        net_margin  = net_profit / gross_rev if gross_rev > 0 else 0
         incremental = gross_margin * (p_treated - p_baseline) - promo_cost
-        profit = round(gross_margin * p_treated - promo_cost, 2)
+        profit      = round(gross_margin * p_treated - promo_cost, 2)
         return (net_margin >= MIN_MARGIN and incremental > 0), profit
 
-    def _cluster_tier(name: str) -> str:
-        """Determine cluster tier from segment name."""
-        n = name.lower()
-        if "champion" in n:
-            return "champions"
-        if "at-risk" in n or "churn" in n:
-            return "at_risk"
-        if "hibernat" in n:
-            return "hibernating"
-        return "mid"
+    def _viable_loyalty(rate_key: str) -> tuple[bool, float]:
+        """Sure Things convert regardless — don't require incremental > 0.
+        Only check that the promo cost doesn't eliminate baseline profit."""
+        cost_rate  = PROMO_COST_RATES[rate_key]
+        promo_cost = avg_spent * cost_rate
+        profit     = round(gross_margin * p_baseline - promo_cost, 2)
+        return profit > 0, profit
 
-    tier = _cluster_tier(cluster_segment_name)
+    tier = cluster_tier(cluster_segment_name)
 
-    # ── Sure Things: loyalty-only (no discount regardless of tier) ───────────
+    # ── Sure Things: first viable rule wins ──────────────────────────────────
     if group == "sure_thing":
-        rate = "vip_points" if is_off_peak else "peak_upsell"
-        ok, profit = _viable(rate)
-        if ok and rfm_seg >= vip_rfm:
-            action = "VIP Reward: แจกแต้ม X2" if is_off_peak else "VIP Early Access"
-            return action, profit, send_window
-        ok, profit = _viable("vip_points")
-        if ok:
-            return "Loyalty Nurture: แต้มสะสม", profit, send_window
+        for rule in SURE_THING_RULES:
+            if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
+                ok, profit = _viable_loyalty(rule["rate_key"])
+                if ok:
+                    action = rule["action"].format(bundle=bundle_name)
+                    return action, profit, send_window
         return "", baseline_profit, time_context
 
-    # ── Persuadables: tier-specific 2D decision grid ─────────────────────────
+    # ── Persuadables: collect all viable, return max profit ──────────────────
+    # rescue=True (churn_risk / cant_lose / hibernating / about_to_sleep with mildly negative
+    # uplift): goal is relationship retention, not incremental conversion — use loyalty check.
+    viable_fn = _viable_loyalty if rescue else _viable
     candidates: list[tuple[str, float, str]] = []
-
-    if tier == "champions":
-        # Champions: NO % discount — VIP bundle (no discount), loyalty points, early access
-        ok, profit = _viable("vip_points")
-        if ok:
-            candidates.append((f"VIP Bundle: {bundle_name}", profit, send_window))
-        if rfm_seg >= vip_rfm:
-            ok, profit = _viable("peak_upsell" if not is_off_peak else "vip_points")
+    for rule in PERSUADABLE_RULES:
+        if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
+            ok, profit = viable_fn(rule["rate_key"])
             if ok:
-                candidates.append(("VIP Early Access", profit, send_window))
-            ok, profit = _viable("vip_points")
-            if ok:
-                candidates.append(("VIP Reward: แจกแต้ม X2", profit, send_window))
-
-    elif tier == "at_risk":
-        # At-Risk: Discount bundle first, then standard retention
-        ok, profit = _viable("standard")
-        if ok:
-            candidates.append((f"Discount 15%: ซื้อ {bundle_name}", profit, send_window))
-        rate = "off_peak" if is_off_peak else "standard"
-        ok, profit = _viable(rate)
-        if ok:
-            candidates.append(("Standard Retention", profit, send_window))
-        # Off-peak traffic driver
-        if is_off_peak and rfm_seg >= mid_rfm:
-            ok, profit = _viable("off_peak_traffic")
-            if ok:
-                candidates.append(("Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ", profit, send_window))
-
-    elif tier == "hibernating":
-        # Hibernating: Reactivation offer with bigger incentive
-        ok, profit = _viable("off_peak")
-        if ok:
-            candidates.append((f"กลับมาช้อป: {bundle_name} ลด 20%", profit, send_window))
-        ok, profit = _viable("off_peak_traffic")
-        if ok:
-            candidates.append((f"Reactivation: {bundle_name}", profit, send_window))
-
-    else:
-        # Mid: Upsell nudge, then standard
-        # Festival spike
-        if is_spike > 0.5 and rfm_seg >= spike_rfm:
-            ok, profit = _viable("festival")
-            if ok:
-                candidates.append(("Standard Retention (Festival Guard)", profit, send_window))
-
-        # Off-peak traffic driver
-        if is_off_peak and rfm_seg >= mid_rfm:
-            ok, profit = _viable("off_peak_traffic")
-            if ok:
-                candidates.append(("Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ", profit, send_window))
-            ok, profit = _viable("off_peak_vip")
-            if ok:
-                candidates.append(("Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)", profit, send_window))
-
-        # VIP upsell
-        if rfm_seg >= vip_rfm:
-            rate = "peak_upsell" if not is_off_peak else "vip_points"
-            ok, profit = _viable(rate)
-            if ok:
-                candidates.append(("VIP Reward: แจกแต้ม X2", profit, send_window))
-
-        if rfm_seg >= vip_rfm and rfm_seg >= 9:
-            ok, profit = _viable("peak_upsell" if not is_off_peak else "vip_points")
-            if ok:
-                candidates.append(("VIP Early Access", profit, send_window))
-
-        # Bundle push (high uplift)
-        if uplift > high_uplift:
-            rate = "peak_upsell" if not is_off_peak else "bundle"
-            ok, profit = _viable(rate)
-            if ok:
-                candidates.append((f"Bundle Upsell: {bundle_name}", profit, send_window))
-
-        # Standard retention fallback
-        rate = "standard" if not is_off_peak else "off_peak"
-        ok, profit = _viable(rate)
-        if ok:
-            candidates.append(("Standard Retention", profit, send_window))
+                action = rule["action"].format(bundle=bundle_name)
+                candidates.append((action, profit, send_window))
 
     if candidates:
         return max(candidates, key=lambda x: x[1])
@@ -1030,6 +959,53 @@ def decide_for_customers(model, ctx, customer_ids=None):
     _cluster_segment_map = getattr(ctx, 'cluster_segment_map', {}) or {}
     temp_df['cluster_bundle']  = temp_df['kmeans_cluster'].map(_cluster_bundle_map).astype(object).fillna(top_bundle_name)
     temp_df['cluster_segment'] = temp_df['kmeans_cluster'].map(_cluster_segment_map).astype(object).fillna('')
+
+    # ── Rule-based segment flags (override K-Means tier for critical states) ──
+    # Applied after K-Means so these always exist even if training data lacked examples.
+    # Priority (highest first): cant_lose > churn_risk > new_customer
+    _new_max_days   = CONFIG.get("new_customer_max_days",    30)
+    _new_max_freq   = CONFIG.get("new_customer_max_freq",     2)
+    _churn_days     = CONFIG.get("churn_risk_min_days",      45)
+    _churn_freq     = CONFIG.get("churn_risk_min_freq",       3)
+    _cantlose_days  = CONFIG.get("cant_lose_min_days",       CONFIG.get("hibernating_recency_days", 90))
+    _cantlose_freq  = CONFIG.get("cant_lose_min_freq",        5)
+    _cantlose_rfm   = CONFIG.get("cant_lose_min_rfm_decile",  7)
+    _sleep_min_days = CONFIG.get("about_to_sleep_min_days", 25)
+    _sleep_max_days = CONFIG.get("about_to_sleep_max_days", 45)
+    _sleep_max_freq = CONFIG.get("about_to_sleep_max_freq",  4)
+
+    def _apply_segment_flags(row):
+        r   = row.get('recency', 999)
+        f   = row.get('frequency', 1)
+        d   = row.get('rfm_decile_segment', 1)
+        seg = row.get('cluster_segment', '')
+        ft  = row.get('freq_trend', 0)   # positive = rising, negative = declining
+
+        if r > _cantlose_days and f >= _cantlose_freq and d >= _cantlose_rfm:
+            return "Can't Lose Them"
+        # Declining customers flagged as Churn Risk sooner (lower recency threshold by 30%)
+        _churn_days_eff = _churn_days if ft >= 0 else max(int(_churn_days * 0.70), 25)
+        if r > _churn_days_eff and f >= _churn_freq:
+            return "Churn Risk"
+        # Declining customers flagged as About to Sleep sooner (+10-day window)
+        _sleep_max_eff = _sleep_max_days if ft >= 0 else _sleep_max_days + 10
+        if _sleep_min_days < r <= _sleep_max_eff and f <= _sleep_max_freq:
+            return "About to Sleep"
+        if r <= _new_max_days and f <= _new_max_freq:
+            return "New Customer"
+        return seg
+
+    _n_declining = int((temp_df['freq_trend'] < 0).sum())
+    _n_rising    = int((temp_df['freq_trend'] > 0).sum())
+    print(f"📈 [Freq Trend] rising={_n_rising} | declining={_n_declining} | "
+          f"stable={len(temp_df) - _n_rising - _n_declining}")
+
+    temp_df['cluster_segment'] = temp_df.apply(_apply_segment_flags, axis=1)
+    flagged = {k: v for k, v in temp_df['cluster_segment'].value_counts().items()
+               if k in ("Can't Lose Them", "Churn Risk", "About to Sleep", "New Customer")}
+    if flagged:
+        print(f"🚩 [Flags] Rule-based overrides: { {k: v for k, v in flagged.items()} }")
+
     # Assign each customer their MAJORITY time_context (mode across all transactions)
     # so a customer who buys 70% of the time during off-peak hours gets "Off-Peak"
     customer_context = (
@@ -1078,12 +1054,94 @@ def decide_for_customers(model, ctx, customer_ids=None):
         if pd.isna(in_stock) or not in_stock:
             return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context])
         if avg_spent < low_basket:
-            return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+            from action_rules import cluster_tier as _cluster_tier
+            tier = _cluster_tier(cluster_segment)
+
+            if tier == "champions":
+                # Champions ที่ basket เล็ก = มาบ่อยแต่ใช้น้อยต่อครั้ง
+                # → Milestone Reward จูงใจให้โตตะกร้าแทน Do Nothing
+                m_basket = CONFIG["milestone_basket"]
+                m_pts    = CONFIG["milestone_points"]
+                m_margin = m_basket * (1 - cogs)
+                m_cost   = m_basket * CONFIG["promo_cost_rates"]["milestone_reward"]
+                p_mile   = max(0.0, min(1.0, prob_c + uplift * 0.5))
+                if m_margin * (p_mile - p_baseline) - m_cost > 0:
+                    m_profit = round(m_margin * p_mile - m_cost, 2)
+                    return pd.Series([
+                        f"Milestone Reward: สั่งครบ {m_basket:.0f} บาท รับ {m_pts} แต้ม",
+                        m_profit, 0, time_context
+                    ])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+
+            elif tier == "new_customer":
+                # New Customer ที่ basket เล็ก = เพิ่งเริ่มต้น ไม่ใช่ไม่ valuable
+                # → Welcome offer เพื่อดึง 2nd visit — ใช้ loyalty check ไม่ใช่ incremental
+                w_cost   = avg_spent * CONFIG["promo_cost_rates"]["new_customer_welcome"]
+                w_profit = round(gross_margin * p_baseline - w_cost, 2)
+                if w_profit > 0:
+                    return pd.Series(["Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+
+            elif tier == "about_to_sleep":
+                # About to Sleep ที่ basket เล็ก = กำลังจะหายไป ต้องกระตุ้นก่อนสายเกิน
+                # → Re-engage nudge — ใช้ loyalty check ไม่ใช่ incremental
+                r_cost   = avg_spent * CONFIG["promo_cost_rates"]["standard"]
+                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                if r_profit > 0:
+                    return pd.Series(["เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+
+            elif tier == "hibernating":
+                # Hibernating ที่ basket เล็ก = ไม่มาแล้ว + ใช้น้อย
+                # → Reactivation nudge เบาๆ — ใช้ loyalty check เพื่อเชิญกลับ
+                r_cost   = avg_spent * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
+                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                if r_profit > 0:
+                    return pd.Series(["Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+
+            elif tier in ("churn_risk", "cant_lose"):
+                # Rescue tiers ที่ basket เล็ก — Early win-back ก่อนสูญเสียลูกค้า
+                # → ใช้ loyalty check เพราะ cost ของการสูญเสียลูกค้า > cost ของโปรโมชั่น
+                r_cost   = avg_spent * CONFIG["promo_cost_rates"]["churn_rescue"]
+                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                if r_profit > 0:
+                    return pd.Series(["Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
+
+            else:
+                # Mid / At-Risk ที่ basket เล็ก → Bundle Upsell หรือ Do Nothing (เดิม)
+                bundle_basket = avg_spent * 1.8
+                bundle_margin = bundle_basket * (1 - cogs)
+                bundle_cost   = bundle_basket * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
+                p_upsell      = max(0.0, min(1.0, prob_c + uplift * 0.4))
+                if bundle_margin * (p_upsell - p_baseline) - bundle_cost > 0 and cluster_bundle and not cluster_bundle.startswith("เซตคู่คุ้มค่า"):
+                    upsell_profit = round(bundle_margin * p_upsell - bundle_cost, 2)
+                    return pd.Series([f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, 0, time_context])
+                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context])
 
         # ── Step 1: Uplift group classification ───────────────────────────────
+        from action_rules import cluster_tier as _cluster_tier
+        tier = _cluster_tier(cluster_segment)
         group = classify_uplift_group(uplift, prob_c)
+        rescue = False   # True → build_action_menu uses loyalty check instead of incremental
         if group == "do_not_disturb":
-            return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context])
+            _rescue_tiers = {"churn_risk", "cant_lose", "hibernating"}
+            _rescue_guard = CONFIG.get("rescue_uplift_guard", -0.10)
+            if tier in _rescue_tiers and uplift >= _rescue_guard:
+                # Rescue tiers: cost of losing customer > cost of mildly negative uplift
+                group = "persuadable"
+                rescue = True
+            elif tier in ("new_customer", "potential_loyalist") and prob_c >= CONFIG["sure_thing_prob_threshold"]:
+                # New Customer / Potential Loyalist ที่ prob_control สูง = convert เองอยู่แล้ว
+                # → welcome / habit-building loyalty action, ไม่ใช่สัญญาณอันตราย
+                group = "sure_thing"
+            elif tier == "about_to_sleep" and uplift >= _rescue_guard:
+                # About to Sleep ที่ drift เบาๆ → ส่งก่อนสูญเสีย
+                group = "persuadable"
+                rescue = True
+            else:
+                return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context])
         if group == "lost_cause":
             return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context])
 
@@ -1098,10 +1156,22 @@ def decide_for_customers(model, ctx, customer_ids=None):
             default_cogs=_default_cogs,
             cluster_segment_name=cluster_segment,
             bundle_name=cluster_bundle,
+            rescue=rescue,
         )
 
         if not action:
-            # Edge case: passed Step 1 but no action is profitable at this AOV
+            # Zero-cost notification: high-value customers (rfm >= threshold) who convert
+            # on their own but no promo is profitable at current AOV.
+            # Send a relationship message with zero promo cost — doesn't hurt margin,
+            # reinforces loyalty without discounting.
+            # Guard: uplift must not be strongly negative (>= rescue_guard) so we're not
+            # sending to customers who actively dislike outreach.
+            _zc_rfm = CONFIG.get("zero_cost_rfm_threshold", 7)
+            _rescue_guard = CONFIG.get("rescue_uplift_guard", -0.10)
+            _zc_tiers = {"champions", "loyal", "cant_lose", "potential_loyalist"}
+            if rfm_seg >= _zc_rfm and tier in _zc_tiers and uplift >= _rescue_guard:
+                return pd.Series(["Zero-Cost: เราคิดถึงคุณ — ขอบคุณที่เป็นลูกค้าที่ดีของเรา",
+                                   baseline_profit, 0, time_context])
             return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0, time_context])
 
         return pd.Series([action, profit, 0, send_window])
@@ -1130,6 +1200,8 @@ def decide_for_customers(model, ctx, customer_ids=None):
             return 'reactivation'
         if 'bundle' in a:
             return 'bundle'
+        if 'zero-cost' in a or 'ขอบคุณ' in a:
+            return 'zero_cost'
         return 'other'
 
     temp_df['treatment_type'] = temp_df['recommended_action'].apply(_treatment_type)

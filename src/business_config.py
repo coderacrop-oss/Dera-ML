@@ -28,7 +28,16 @@ CONFIG = {
         "off_peak_traffic":   0.22,   # Aggressive off-peak traffic driver — heavier discount ok
         "peak_upsell":        0.08,   # Light touch during peak — customers already there
         "off_peak_vip":       0.05,   # VIP points during off-peak — cheap way to pull them in
+        "bundle_upsell_low":  0.03,   # Light nudge for low-basket customers — suggest adding 1 bundle item, no heavy discount
+        "milestone_reward":   0.03,   # Points reward for reaching milestone basket (cost as % of milestone target)
+        "new_customer_welcome": 0.10, # Welcome offer — 1st return visit incentive
+        "churn_rescue":         0.12, # Early warning retention — before full churn
+        "vip_winback":          0.15, # Aggressive win-back for high-value drifting VIP
     },
+
+    # === Milestone Reward (low-basket Champions) ===
+    "milestone_basket":  150,   # THB target order size to earn reward
+    "milestone_points":   50,   # points awarded on reaching milestone
 
     # === Send window: when to push the notification per context ===
     # Format: "HH:MM" — send notification this many hours BEFORE the target window
@@ -55,8 +64,10 @@ CONFIG = {
     "low_basket_threshold":   100,    # AOV below this → Do Nothing
     "mid_basket_threshold":   800,    # AOV below this → off-peak promo
     "negative_uplift_guard":  -0.04,  # uplift below this → Do Nothing
+    "rescue_uplift_guard":    -0.10,  # relaxed threshold for churn_risk / cant_lose / hibernating
     "high_uplift_threshold":   0.08,  # uplift above this → push bundle promo
     "vip_rfm_threshold":       8,     # RFM decile ≥ this → VIP reward
+    "zero_cost_rfm_threshold": 7,     # RFM decile ≥ this → eligible for zero-cost notification
     "vip_prob_threshold":      0.4,   # prob_control ≥ this → VIP reward
     "spike_rfm_threshold":     7,     # RFM decile for campaign-spike guard
     "mid_rfm_threshold":       4,     # RFM decile for mid-tier off-peak eligibility
@@ -79,6 +90,19 @@ CONFIG = {
     "stock_buffer_multiplier":   1.5,   # estimated stock covers this multiple of avg demand per cycle
     "low_stock_threshold":       5,     # remaining_stock ≤ this → out of stock
     "stock_restock_cycle_days":  14,    # assumed replenishment cycle (days)
+
+    # === Rule-based segment flag thresholds ===
+    # Applied AFTER K-Means — override tier for critical states K-Means may miss
+    "new_customer_max_days":     30,   # recency < this + freq ≤ 2 → new customer
+    "new_customer_max_freq":      2,
+    "churn_risk_min_days":       45,   # recency > this + freq ≥ threshold → churn risk
+    "churn_risk_min_freq":        3,
+    "cant_lose_min_days":        90,   # recency > this + high F/M → can't lose (VIP drifting)
+    "cant_lose_min_freq":         5,
+    "cant_lose_min_rfm_decile":   7,   # top 30%
+    "about_to_sleep_min_days":   25,   # recency > this → starting to drift
+    "about_to_sleep_max_days":   45,   # recency ≤ this → not yet churn_risk
+    "about_to_sleep_max_freq":    4,   # max frequency to qualify (not a frequent buyer drifting)
 
     # === Timing & timezone ===
     "business_tz":     "Asia/Bangkok",

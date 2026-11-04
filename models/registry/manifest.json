@@ -1,5 +1,5 @@
 {
-  "current": "v5",
+  "current": "v7",
   "versions": [
     {
       "version": "v1",
@@ -152,6 +152,72 @@
       "approved_at": "2026-11-03T18:53:31.860310+00:00",
       "provenance": "v26-no-freq-psi-equal-baseline",
       "metrics": null,
+      "legacy": false
+    },
+    {
+      "version": "v6",
+      "sha256": "ea0ce0a36aaa5f01f3a800c71f2edd61733e2532ac54bd26654b01f2a0c787b7",
+      "created_at": null,
+      "approved_by": "nina",
+      "approved_at": null,
+      "provenance": "unknown",
+      "metrics": null,
+      "legacy": false
+    },
+    {
+      "version": "v7",
+      "sha256": "e02f5610084c279f3b93836e9e576ee41cc101fe1e19cee2cae9f9075aac25ab",
+      "created_at": "2026-11-04T06:29:29.343325+00:00",
+      "approved_by": "nina",
+      "approved_at": "2026-11-04T06:30:48.916107+00:00",
+      "provenance": "real-labels",
+      "metrics": {
+        "challenger": {
+          "profit": 17796.42,
+          "send_count": 611,
+          "blocked_count": 0,
+          "do_nothing_pct": 37.78004073319756,
+          "uplift_metrics": {
+            "n_holdout": 982,
+            "n_treated": 668,
+            "n_control": 314,
+            "ate_pred": -0.0845,
+            "ate_actual": 0.0574,
+            "ate_bias": -0.1419,
+            "qini": 1.2099,
+            "auuc": -0.1007,
+            "baseline_ece": 0.0899,
+            "interpretation": "excellent uplift model",
+            "note": "pooled across 2 stores"
+          },
+          "shap_importance": {
+            "frequency": 0.096837,
+            "rfm_decile_segment": 0.040104,
+            "total_price": 0.036378,
+            "quantity": 0.006977,
+            "is_campaign_spike": 0.001349
+          }
+        },
+        "champion": {
+          "profit": 17184.05,
+          "send_count": 605,
+          "blocked_count": 0,
+          "do_nothing_pct": 38.39103869653768,
+          "uplift_metrics": {
+            "n_holdout": 982,
+            "n_treated": 668,
+            "n_control": 314,
+            "ate_pred": -0.0174,
+            "ate_actual": 0.0574,
+            "ate_bias": -0.0748,
+            "qini": 1.6193,
+            "auuc": 0.0264,
+            "baseline_ece": 0.0657,
+            "interpretation": "excellent uplift model",
+            "note": "pooled across 2 stores"
+          }
+        }
+      },
       "legacy": false
     }
   ]
