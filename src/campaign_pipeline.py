@@ -727,6 +727,7 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
                 "recommended_action":  row["recommended_action"],
                 "offer":               seg.get("recommended_promo", "-"),
                 "expected_profit":     row["expected_profit"],
+                "promo_cost":          row.get("promo_cost", 0.0),
                 "send_date":           send_date.date(),
                 "send_window":         send_window,
                 "send_time_hint":      send_time,
@@ -762,11 +763,20 @@ def run_layer4(pos_file_path="data/transactions.csv",
                product_cogs_dict=None,
                default_cogs=None,
                models_root=None,
-               ctx=None):
+               ctx=None,
+               campaign_budget=None):
     """Serving: score every customer with the approved champion. Never trains, never writes the registry.
 
     Pass a pre-built Layer4Context as `ctx` to avoid re-running L0-L3 when the caller
     has already built the context for cluster assignment.
+
+    Parameters
+    ----------
+    campaign_budget : float or None
+        Optional spend ceiling (same currency as promo_cost).  When set, the
+        broadcast list is filtered via the greedy knapsack so that total
+        promo_cost stays within this budget.  Pass None (default) to send to
+        all CFO-approved customers without a budget constraint.
     """
     print("=== กำลังประมวลผล Layer 4: Campaign Engine (Serving — ใช้ Champion ที่อนุมัติแล้ว) ===")
 
@@ -816,6 +826,17 @@ def run_layer4(pos_file_path="data/transactions.csv",
         print("ℹ️  [Drift] Champion has no baseline stats (trained before P0 upgrade) — skipping drift check")
 
     _, detail = decide_for_customers(champion, ctx)
+
+    # ── Budget knapsack (optional) ────────────────────────────────────────────
+    if campaign_budget is not None and campaign_budget > 0:
+        from budget_optimizer import select_within_budget, print_budget_report
+        detail = select_within_budget(detail, budget=campaign_budget)
+        # Suppress customers excluded by budget constraint
+        detail.loc[
+            (detail["should_send"] == 1) & (~detail["selected_for_budget"].fillna(False)),
+            ["should_send", "recommended_action"]
+        ] = [0, "Do Nothing (Over Budget)"]
+        print_budget_report(detail, campaign_budget)
 
     total_cust = len(detail)
     print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า) โดย Champion {ref.version} [{ref.provenance}]:")
