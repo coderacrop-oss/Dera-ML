@@ -1,8 +1,8 @@
 """Layer 2: the top bundles must be different pairs, and the pair counts must count bills."""
 import pandas as pd
 
-from csv_pipeline_engine import layer2_csv_mba
-from layer4_uplift_margin import run_layer2
+from campaign_pipeline import layer2_csv_mba
+from uplift_engine import _run_layer2 as run_layer2
 
 
 def _bundle_csv(path):
