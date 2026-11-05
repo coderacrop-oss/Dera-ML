@@ -7,11 +7,20 @@ treatment/control detection, and streaming for large files.
 from __future__ import annotations
 
 import csv as _csv
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    from data_security import filter_columns, hash_dataframe_ids
+    _SECURITY_AVAILABLE = True
+except ImportError:
+    _SECURITY_AVAILABLE = False
+
+_ingest_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +71,17 @@ class DataIngester:
         Number of rows per streaming chunk (used for CSV / CSV.GZ).
     """
 
-    def __init__(self, source_path: str, chunk_size: int = 50_000) -> None:
+    def __init__(
+        self,
+        source_path: str,
+        chunk_size: int = 50_000,
+        store_salt: str = "",
+        store_id: str = "",
+    ) -> None:
         self.source_path = str(source_path)
         self.chunk_size = chunk_size
+        self.store_salt = store_salt
+        self.store_id = store_id
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -76,6 +93,20 @@ class DataIngester:
 
         raw_df = self._load(warnings)
         n_rows_raw = len(raw_df)
+
+        # Security: drop PII columns not in the allowlist before any processing
+        if _SECURITY_AVAILABLE:
+            raw_df, dropped_cols = filter_columns(raw_df, warn=True)
+            if dropped_cols:
+                warnings.append(
+                    f"Security: dropped {len(dropped_cols)} non-allowlisted "
+                    f"column(s): {dropped_cols}"
+                )
+        else:
+            _ingest_logger.warning(
+                "data_security module not available — column filtering skipped."
+            )
+
         schema = self._infer_schema(raw_df, warnings)
         clean_df, quality_stats = self._validate_and_clean(raw_df, schema, warnings)
         treatment_source = self._detect_treatment_source(schema, warnings)
@@ -86,7 +117,24 @@ class DataIngester:
 
         quality_report = self._build_quality_report(n_rows_raw, clean_df, schema, quality_stats)
 
+        # Security: hash customer_id if a store_salt is configured
         cid_col = schema.get("customer_id")
+        if _SECURITY_AVAILABLE and self.store_salt and cid_col and cid_col in clean_df.columns:
+            try:
+                clean_df = hash_dataframe_ids(
+                    clean_df,
+                    id_col=cid_col,
+                    store_salt=self.store_salt,
+                )
+                _ingest_logger.info(
+                    "DataIngester: customer_id column '%s' hashed for store '%s'.",
+                    cid_col,
+                    self.store_id or "unknown",
+                )
+            except Exception as exc:
+                warnings.append(f"Security: customer_id hashing failed — {exc}")
+                _ingest_logger.error("DataIngester: hashing error: %s", exc)
+
         n_customers    = int(clean_df[cid_col].nunique()) if cid_col else 0
         n_transactions = len(clean_df)
 
