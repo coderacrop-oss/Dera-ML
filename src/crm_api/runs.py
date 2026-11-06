@@ -99,11 +99,25 @@ def basket_route_by_segment(final: pd.DataFrame, seg_of: pd.DataFrame) -> dict:
         seg_of.assign(customer_id=seg_of["customer_id"].astype(str))[["customer_id", "segment_name"]], on="customer_id", how="inner")
     out = {}
     for name, g in both.groupby("segment_name"):
-        stock_out = g["recommended_action"] == "Do Nothing (Out of Stock)"
-        low = (~stock_out) & (g["avg_spent"].astype(float) < threshold)
+        if "basket_route" in g.columns:  # the engine wrote down the route each customer took: use that, not a re-computation
+            stock_out, low = g["basket_route"] == "out_of_stock", g["basket_route"] == "low"
+        else:
+            stock_out = g["recommended_action"] == "Do Nothing (Out of Stock)"
+            low = (~stock_out) & (g["avg_spent"].astype(float) < threshold)
         out[str(name)] = {"low": int(low.sum()), "normal": int(((~stock_out) & ~low).sum()), "out_of_stock": int(stock_out.sum()),
                           "threshold": round(threshold, 2), "adaptive": adaptive}
     return out
+
+
+def uplift_groups_by_segment(final: pd.DataFrame, seg_of: pd.DataFrame) -> dict:
+    """How many customers of each group the engine put in each uplift group (persuadable, sure_thing, do_not_disturb, lost_cause).
+    Only customers who reached that step have one; a run whose engine did not record it gives nothing."""
+    if "uplift_group" not in final.columns:
+        return {}
+    both = final.assign(customer_id=final["customer_id"].astype(str)).merge(
+        seg_of.assign(customer_id=seg_of["customer_id"].astype(str))[["customer_id", "segment_name"]], on="customer_id", how="inner")
+    both = both.dropna(subset=["uplift_group"])
+    return {str(n): {str(k): int(v) for k, v in g["uplift_group"].value_counts().items()} for n, g in both.groupby("segment_name")}
 
 
 def build_layers(directory: Path, log: str, month: str, generated_at: str) -> dict:
@@ -115,13 +129,15 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
     by_name = {str(p.get("name")): p for p in promos}  # Layer 4's own numbers per group, as Dera AI names them below
     final = _read(directory / "final_campaign_engine_output.csv")
     routes = basket_route_by_segment(final, seg_of)
+    uplift_groups = uplift_groups_by_segment(final, seg_of)
     segments = []
     for name, g in merged.groupby("segment_name", sort=True):
         decided = by_name.get(str(name), {})
         segments.append({"segment_name": str(name), "customer_count": int(len(g)), "avg_recency_days": round(float(g["recency"].mean()), 2),
                          "avg_frequency": round(float(g["frequency"].mean()), 2), "avg_monetary": round(float(g["monetary"].mean()), 2),
                          "broadcast_count": decided.get("broadcast"), "suppressed_count": decided.get("suppressed"),
-                         "l4_action_breakdown": decided.get("action_breakdown"), "basket_route": routes.get(str(name))})
+                         "l4_action_breakdown": decided.get("action_breakdown"), "basket_route": routes.get(str(name)),
+                         "l4_uplift_groups": uplift_groups.get(str(name))})
     sil = re.search(r"Silhouette=([0-9.]+)", log)
     outl = re.search(r"ออกไป (\d+) รายการ", log)
     layer1 = {"k": int(rfm["kmeans_cluster"].nunique()), "silhouette": float(sil.group(1)) if sil else None, "customers": int(len(rfm)),

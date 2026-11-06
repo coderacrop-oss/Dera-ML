@@ -153,7 +153,8 @@ def test_layers_have_the_same_shape_as_dera_ais_analysis(make_client):
     seg = {s["segment_name"]: s for s in d["layer1"]["segments"]}
     assert seg["Champions"] == {"segment_name": "Champions", "customer_count": 2, "avg_recency_days": 20.0, "avg_frequency": 4.0, "avg_monetary": 200.0,
                                 "broadcast_count": 2, "suppressed_count": 0, "l4_action_breakdown": {"VIP Early Access": 2},
-                                "basket_route": {"low": 2, "normal": 0, "out_of_stock": 0, "threshold": 100.0, "adaptive": False}}
+                                "basket_route": {"low": 2, "normal": 0, "out_of_stock": 0, "threshold": 100.0, "adaptive": False},
+                                "l4_uplift_groups": None}
     assert seg["Hibernating"]["l4_action_breakdown"] == {"Do Nothing (Out of Stock)": 1, "Do Nothing (Do Not Disturb)": 1}
     # Layer 4 sends a customer down route A (low basket) or B by average basket against the threshold; out-of-stock customers are stopped before that
     assert seg["Hibernating"]["basket_route"] == {"low": 0, "normal": 1, "out_of_stock": 1, "threshold": 100.0, "adaptive": False}
@@ -188,3 +189,21 @@ def test_basket_route_is_absent_when_the_run_has_no_average_basket(tmp_path):
     from crm_api.runs import basket_route_by_segment
     final = pd.DataFrame([dict(customer_id="C0", recommended_action="VIP Early Access")])
     assert basket_route_by_segment(final, pd.DataFrame([dict(customer_id="C0", segment_name="G")])) == {}
+
+
+def test_basket_route_counts_come_from_what_the_engine_recorded_when_it_recorded_them(tmp_path):
+    from crm_api.runs import basket_route_by_segment
+    # avg_spent says "all low", but the engine's own record wins: it is what actually decided
+    final = pd.DataFrame([dict(customer_id=f"C{i}", recommended_action="x", avg_spent=1.0, basket_route=r)
+                          for i, r in enumerate(["low", "normal", "normal", "out_of_stock"])])
+    seg_of = pd.DataFrame([dict(customer_id=f"C{i}", segment_name="G") for i in range(4)])
+    got = basket_route_by_segment(final, seg_of)["G"]
+    assert (got["low"], got["normal"], got["out_of_stock"]) == (1, 2, 1)
+
+
+def test_uplift_groups_are_counted_per_segment_and_absent_when_not_recorded(tmp_path):
+    from crm_api.runs import uplift_groups_by_segment
+    final = pd.DataFrame([dict(customer_id=f"C{i}", uplift_group=g) for i, g in enumerate(["persuadable", "persuadable", "sure_thing", None])])
+    seg_of = pd.DataFrame([dict(customer_id=f"C{i}", segment_name="G") for i in range(4)])
+    assert uplift_groups_by_segment(final, seg_of) == {"G": {"persuadable": 2, "sure_thing": 1}}
+    assert uplift_groups_by_segment(final.drop(columns="uplift_group"), seg_of) == {}

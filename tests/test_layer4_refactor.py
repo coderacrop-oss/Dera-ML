@@ -106,3 +106,17 @@ def test_market_is_recession_flags_a_price_collapse():
     price = [100.0] * 75 + [10.0] * 25
     rec, current = l4.market_is_recession(pd.DataFrame({"timestamp": ts, "total_price": price}))
     assert rec is True and current == pytest.approx(10.0)
+
+
+def test_decisions_record_the_route_and_uplift_group_each_customer_went_through(workdir):
+    ctx = l4.build_serving_context(make_pos_csv(workdir, n_customers=120, seed=0), None)
+    _, detail = l4.decide_for_customers(_trained(ctx), ctx)
+    assert set(detail["basket_route"]) <= {"out_of_stock", "low", "normal"}
+    groups = {"persuadable", "sure_thing", "do_not_disturb", "lost_cause"}
+    # only customers who got to the uplift step have a group; stock and low-basket stops have none
+    assert set(detail.loc[detail["basket_route"] != "normal", "uplift_group"].dropna()) == set()
+    assert set(detail.loc[detail["basket_route"] == "normal", "uplift_group"]) <= groups
+    # the route says exactly what the decision did
+    assert (detail.loc[detail["basket_route"] == "out_of_stock", "recommended_action"] == "Do Nothing (Out of Stock)").all()
+    assert (detail.loc[detail["uplift_group"] == "lost_cause", "recommended_action"] == "Do Nothing (Lost Cause)").all()
+

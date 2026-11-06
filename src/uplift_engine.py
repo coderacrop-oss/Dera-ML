@@ -1139,6 +1139,9 @@ def decide_for_customers(model, ctx, customer_ids=None):
         low_basket = config_low
         mid_basket = config_mid
 
+    # What each customer went through (read-only trace, never used to decide): which route, and which uplift group.
+    _route_of, _group_of = {}, {}
+
     def calculate_action_and_profit(row):
         uplift          = float(row['uplift_score'])
         prob_c          = float(row['prob_control'])
@@ -1158,7 +1161,9 @@ def decide_for_customers(model, ctx, customer_ids=None):
 
         # ── Step 1: Hard stops ────────────────────────────────────────────────
         if pd.isna(in_stock) or not in_stock:
+            _route_of[row.name] = "out_of_stock"
             return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context, 0.0])
+        _route_of[row.name] = "low" if avg_spent < low_basket else "normal"
         if avg_spent < low_basket:
             from action_rules import cluster_tier as _cluster_tier
             tier = _cluster_tier(cluster_segment)
@@ -1232,7 +1237,9 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 group = "persuadable"
                 rescue = True
             else:
+                _group_of[row.name] = "do_not_disturb"
                 return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context, 0.0])
+        _group_of[row.name] = group
         if group == "lost_cause":
             return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context, 0.0])
 
@@ -1268,6 +1275,8 @@ def decide_for_customers(model, ctx, customer_ids=None):
     temp_df['guardrail_blocked']  = res[2]
     temp_df['send_window']        = res[3]
     temp_df['promo_cost']         = res[4]
+    temp_df['basket_route']       = temp_df.index.map(_route_of)
+    temp_df['uplift_group']       = temp_df.index.map(_group_of)
     temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
     temp_df['should_send'] = (
         (temp_df['guardrail_blocked'] == 0) &
