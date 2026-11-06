@@ -154,7 +154,7 @@ def test_layers_have_the_same_shape_as_dera_ais_analysis(make_client):
     assert seg["Champions"] == {"segment_name": "Champions", "customer_count": 2, "avg_recency_days": 20.0, "avg_frequency": 4.0, "avg_monetary": 200.0,
                                 "broadcast_count": 2, "suppressed_count": 0, "l4_action_breakdown": {"VIP Early Access": 2},
                                 "basket_route": {"low": 2, "normal": 0, "out_of_stock": 0, "threshold": 100.0, "adaptive": False},
-                                "l4_uplift_groups": None}
+                                "l4_uplift_groups": None, "l4_action_by_route": None}
     assert seg["Hibernating"]["l4_action_breakdown"] == {"Do Nothing (Out of Stock)": 1, "Do Nothing (Do Not Disturb)": 1}
     # Layer 4 sends a customer down route A (low basket) or B by average basket against the threshold; out-of-stock customers are stopped before that
     assert seg["Hibernating"]["basket_route"] == {"low": 0, "normal": 1, "out_of_stock": 1, "threshold": 100.0, "adaptive": False}
@@ -207,3 +207,12 @@ def test_uplift_groups_are_counted_per_segment_and_absent_when_not_recorded(tmp_
     seg_of = pd.DataFrame([dict(customer_id=f"C{i}", segment_name="G") for i in range(4)])
     assert uplift_groups_by_segment(final, seg_of) == {"G": {"persuadable": 2, "sure_thing": 1}}
     assert uplift_groups_by_segment(final.drop(columns="uplift_group"), seg_of) == {}
+
+
+def test_actions_are_counted_per_segment_and_route_when_the_engine_recorded_the_route(tmp_path):
+    from crm_api.runs import actions_by_route_by_segment
+    final = pd.DataFrame([dict(customer_id=f"C{i}", recommended_action=a, basket_route=r)
+                          for i, (a, r) in enumerate([("Welcome: x", "low"), ("Welcome: x", "low"), ("VIP Early Access", "normal"), ("Do Nothing (Out of Stock)", "out_of_stock")])])
+    seg_of = pd.DataFrame([dict(customer_id=f"C{i}", segment_name="G") for i in range(4)])
+    assert actions_by_route_by_segment(final, seg_of) == {"G": {"low": {"Welcome: x": 2}, "normal": {"VIP Early Access": 1}}}
+    assert actions_by_route_by_segment(final.drop(columns="basket_route"), seg_of) == {}

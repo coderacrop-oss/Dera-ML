@@ -120,6 +120,19 @@ def uplift_groups_by_segment(final: pd.DataFrame, seg_of: pd.DataFrame) -> dict:
     return {str(n): {str(k): int(v) for k, v in g["uplift_group"].value_counts().items()} for n, g in both.groupby("segment_name")}
 
 
+def actions_by_route_by_segment(final: pd.DataFrame, seg_of: pd.DataFrame) -> dict:
+    """Per group: which action each route (low / normal basket) chose and for how many. Out-of-stock customers took neither route.
+    A run whose engine did not record the route gives nothing."""
+    if "basket_route" not in final.columns:
+        return {}
+    both = final.assign(customer_id=final["customer_id"].astype(str)).merge(
+        seg_of.assign(customer_id=seg_of["customer_id"].astype(str))[["customer_id", "segment_name"]], on="customer_id", how="inner")
+    out = {}
+    for name, g in both.groupby("segment_name"):
+        out[str(name)] = {r: {str(a): int(n) for a, n in g.loc[g["basket_route"] == r, "recommended_action"].value_counts().items()} for r in ("low", "normal")}
+    return out
+
+
 def build_layers(directory: Path, log: str, month: str, generated_at: str) -> dict:
     """Layers 1-4 of a finished run, in the shape of Dera AI's `plans/<month>/analysis`, from the files the pipeline left."""
     rfm = _read(directory / "layer1_dual_valuation.csv")
@@ -130,6 +143,7 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
     final = _read(directory / "final_campaign_engine_output.csv")
     routes = basket_route_by_segment(final, seg_of)
     uplift_groups = uplift_groups_by_segment(final, seg_of)
+    action_routes = actions_by_route_by_segment(final, seg_of)
     segments = []
     for name, g in merged.groupby("segment_name", sort=True):
         decided = by_name.get(str(name), {})
@@ -137,7 +151,8 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
                          "avg_frequency": round(float(g["frequency"].mean()), 2), "avg_monetary": round(float(g["monetary"].mean()), 2),
                          "broadcast_count": decided.get("broadcast"), "suppressed_count": decided.get("suppressed"),
                          "l4_action_breakdown": decided.get("action_breakdown"), "basket_route": routes.get(str(name)),
-                         "l4_uplift_groups": uplift_groups.get(str(name))})
+                         "l4_uplift_groups": uplift_groups.get(str(name)),
+                         "l4_action_by_route": action_routes.get(str(name))})
     sil = re.search(r"Silhouette=([0-9.]+)", log)
     outl = re.search(r"ออกไป (\d+) รายการ", log)
     layer1 = {"k": int(rfm["kmeans_cluster"].nunique()), "silhouette": float(sil.group(1)) if sil else None, "customers": int(len(rfm)),
