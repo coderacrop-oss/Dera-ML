@@ -86,9 +86,15 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
     rfm = _read(directory / "layer1_dual_valuation.csv")
     seg_of = _read(directory / "customer_segments_latest.csv")
     merged = seg_of.merge(rfm[["customer_id", "recency", "frequency", "monetary"]], on="customer_id", how="left")
-    segments = [{"segment_name": str(name), "customer_count": int(len(g)), "avg_recency_days": round(float(g["recency"].mean()), 2),
-                 "avg_frequency": round(float(g["frequency"].mean()), 2), "avg_monetary": round(float(g["monetary"].mean()), 2)}
-                for name, g in merged.groupby("segment_name", sort=True)]
+    promos = json.loads((directory / "segments_latest.json").read_text(encoding="utf-8")).get("segments", [])
+    by_name = {str(p.get("name")): p for p in promos}  # Layer 4's own numbers per group, as Dera AI names them below
+    segments = []
+    for name, g in merged.groupby("segment_name", sort=True):
+        decided = by_name.get(str(name), {})
+        segments.append({"segment_name": str(name), "customer_count": int(len(g)), "avg_recency_days": round(float(g["recency"].mean()), 2),
+                         "avg_frequency": round(float(g["frequency"].mean()), 2), "avg_monetary": round(float(g["monetary"].mean()), 2),
+                         "broadcast_count": decided.get("broadcast"), "suppressed_count": decided.get("suppressed"),
+                         "l4_action_breakdown": decided.get("action_breakdown")})
     sil = re.search(r"Silhouette=([0-9.]+)", log)
     outl = re.search(r"ออกไป (\d+) รายการ", log)
     layer1 = {"k": int(rfm["kmeans_cluster"].nunique()), "silhouette": float(sil.group(1)) if sil else None, "customers": int(len(rfm)),
@@ -96,7 +102,6 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
 
     bundles = [{"a": str(r.antecedents), "b": str(r.consequents), "support": float(r.support), "confidence": float(r.confidence), "lift": float(r.lift)}
                for r in _read(directory / "layer2_top_bundles.csv").itertuples()]
-    promos = json.loads((directory / "segments_latest.json").read_text(encoding="utf-8")).get("segments", [])
     offers = [{"segment": str(s.get("name")), "offer": str(s.get("recommended_promo")), "basis": None} for s in promos if s.get("recommended_promo")]
     layer2 = {"bundles": bundles, "offers": offers}
 

@@ -25,8 +25,10 @@ def write_layer_files(d):
                  ).to_csv(d / "layer1_dual_valuation.csv", index=False)
     pd.DataFrame([dict(customer_id=f"C{i}", segment_id=i % 2, segment_name=["Champions", "Hibernating"][i % 2]) for i in range(4)]).to_csv(d / "customer_segments_latest.csv", index=False)
     (d / "segments_latest.json").write_text(json.dumps({"generated_at": "g", "gate_status": "PASSED", "segments": [
-        {"id": 0, "name": "Champions", "customers": 2, "recommended_promo": "VIP Early Access"},
-        {"id": 1, "name": "Hibernating", "customers": 2, "recommended_promo": "ลด 15%"}]}, ensure_ascii=False), encoding="utf-8")
+        {"id": 0, "name": "Champions", "customers": 2, "broadcast": 2, "suppressed": 0, "recommended_promo": "VIP Early Access",
+         "action_breakdown": {"VIP Early Access": 2}},
+        {"id": 1, "name": "Hibernating", "customers": 2, "broadcast": 0, "suppressed": 2, "recommended_promo": "ลด 15%",
+         "action_breakdown": {"Do Nothing (Out of Stock)": 1, "Do Nothing (Do Not Disturb)": 1}}]}, ensure_ascii=False), encoding="utf-8")
     pd.DataFrame([dict(antecedents="tea", consequents="cake", support=0.1, confidence=0.5, lift=3.0)]).to_csv(d / "layer2_top_bundles.csv", index=False)
     (d / "layer3_peak_hours.json").write_text(json.dumps({"peak_hours": [12, 13], "off_peak_hours": [10, 11]}), encoding="utf-8")
     pd.DataFrame([dict(transaction_id="B1", customer_id="C0", product_name="tea", timestamp="t", time_context="Peak", remaining_stock=40, in_stock=True),
@@ -149,7 +151,10 @@ def test_layers_have_the_same_shape_as_dera_ais_analysis(make_client):
     assert d["month"] == "2026-12" and d["label_mode"] == "proxy" and d["generated_at"]
     assert d["layer1"]["k"] == 2 and d["layer1"]["customers"] == 4 and d["layer1"]["silhouette"] == 0.512 and d["layer1"]["outliersRemoved"] == 7
     seg = {s["segment_name"]: s for s in d["layer1"]["segments"]}
-    assert seg["Champions"] == {"segment_name": "Champions", "customer_count": 2, "avg_recency_days": 20.0, "avg_frequency": 4.0, "avg_monetary": 200.0}
+    assert seg["Champions"] == {"segment_name": "Champions", "customer_count": 2, "avg_recency_days": 20.0, "avg_frequency": 4.0, "avg_monetary": 200.0,
+                                "broadcast_count": 2, "suppressed_count": 0, "l4_action_breakdown": {"VIP Early Access": 2}}
+    assert seg["Hibernating"]["l4_action_breakdown"] == {"Do Nothing (Out of Stock)": 1, "Do Nothing (Do Not Disturb)": 1}
+    assert seg["Hibernating"]["broadcast_count"] == 0 and seg["Hibernating"]["suppressed_count"] == 2
     assert d["layer2"]["bundles"] == [{"a": "tea", "b": "cake", "support": 0.1, "confidence": 0.5, "lift": 3.0}]
     assert d["layer2"]["offers"][0] == {"segment": "Champions", "offer": "VIP Early Access", "basis": None}
     assert d["layer3"]["peakHours"] == [12, 13] and d["layer3"]["outOfStock"] == 1
