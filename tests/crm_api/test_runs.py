@@ -36,10 +36,10 @@ def write_layer_files(d):
                   dict(transaction_id="B3", customer_id="C1", product_name="cake", timestamp="t", time_context="Peak", remaining_stock=0, in_stock=False)]
                  ).to_csv(d / "layer3_context_flags.csv", index=False)
     pd.DataFrame([
-        dict(customer_id="C0", recommended_action="VIP Early Access", should_send=1, expected_profit=10.5, guardrail_blocked=0),
-        dict(customer_id="C1", recommended_action="Do Nothing (Out of Stock)", should_send=0, expected_profit=0.0, guardrail_blocked=0),
-        dict(customer_id="C2", recommended_action="Do Nothing (Do Not Disturb)", should_send=0, expected_profit=0.0, guardrail_blocked=1),
-        dict(customer_id="C3", recommended_action="VIP Early Access", should_send=1, expected_profit=4.5, guardrail_blocked=0)]
+        dict(customer_id="C0", recommended_action="VIP Early Access", should_send=1, expected_profit=10.5, guardrail_blocked=0, avg_spent=50.0),
+        dict(customer_id="C1", recommended_action="Do Nothing (Out of Stock)", should_send=0, expected_profit=0.0, guardrail_blocked=0, avg_spent=400.0),
+        dict(customer_id="C2", recommended_action="Do Nothing (Do Not Disturb)", should_send=0, expected_profit=0.0, guardrail_blocked=1, avg_spent=30.0),
+        dict(customer_id="C3", recommended_action="VIP Early Access", should_send=1, expected_profit=4.5, guardrail_blocked=0, avg_spent=500.0)]
     ).to_csv(d / "final_campaign_engine_output.csv", index=False)
 
 
@@ -152,8 +152,11 @@ def test_layers_have_the_same_shape_as_dera_ais_analysis(make_client):
     assert d["layer1"]["k"] == 2 and d["layer1"]["customers"] == 4 and d["layer1"]["silhouette"] == 0.512 and d["layer1"]["outliersRemoved"] == 7
     seg = {s["segment_name"]: s for s in d["layer1"]["segments"]}
     assert seg["Champions"] == {"segment_name": "Champions", "customer_count": 2, "avg_recency_days": 20.0, "avg_frequency": 4.0, "avg_monetary": 200.0,
-                                "broadcast_count": 2, "suppressed_count": 0, "l4_action_breakdown": {"VIP Early Access": 2}}
+                                "broadcast_count": 2, "suppressed_count": 0, "l4_action_breakdown": {"VIP Early Access": 2},
+                                "basket_route": {"low": 2, "normal": 0, "out_of_stock": 0, "threshold": 100.0, "adaptive": False}}
     assert seg["Hibernating"]["l4_action_breakdown"] == {"Do Nothing (Out of Stock)": 1, "Do Nothing (Do Not Disturb)": 1}
+    # Layer 4 sends a customer down route A (low basket) or B by average basket against the threshold; out-of-stock customers are stopped before that
+    assert seg["Hibernating"]["basket_route"] == {"low": 0, "normal": 1, "out_of_stock": 1, "threshold": 100.0, "adaptive": False}
     assert seg["Hibernating"]["broadcast_count"] == 0 and seg["Hibernating"]["suppressed_count"] == 2
     assert d["layer2"]["bundles"] == [{"a": "tea", "b": "cake", "support": 0.1, "confidence": 0.5, "lift": 3.0}]
     assert d["layer2"]["offers"][0] == {"segment": "Champions", "offer": "VIP Early Access", "basis": None}
@@ -170,3 +173,18 @@ def test_real_labels_give_no_proxy_warning(make_client):
     wait_for(client, start(client).json()["run_id"])
     d = client.get("/v1/runs/latest/layers", headers=HDR).json()
     assert d["label_mode"] == "real" and d["warnings"] == []
+
+
+def test_basket_route_uses_the_stores_own_threshold_when_the_median_basket_is_below_the_floor(tmp_path):
+    from crm_api.runs import basket_route_by_segment
+    final = pd.DataFrame([dict(customer_id=f"C{i}", recommended_action="VIP Early Access", avg_spent=v) for i, v in enumerate([10, 20, 30, 40, 50])])
+    seg_of = pd.DataFrame([dict(customer_id=f"C{i}", segment_name="G") for i in range(5)])
+    got = basket_route_by_segment(final, seg_of)["G"]
+    # the median (30) is under the configured floor (100), so the engine uses the 10th percentile (14) as the line
+    assert got["adaptive"] is True and got["threshold"] == 14.0 and (got["low"], got["normal"]) == (1, 4)
+
+
+def test_basket_route_is_absent_when_the_run_has_no_average_basket(tmp_path):
+    from crm_api.runs import basket_route_by_segment
+    final = pd.DataFrame([dict(customer_id="C0", recommended_action="VIP Early Access")])
+    assert basket_route_by_segment(final, pd.DataFrame([dict(customer_id="C0", segment_name="G")])) == {}

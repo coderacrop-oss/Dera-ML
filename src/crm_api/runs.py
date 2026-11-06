@@ -81,6 +81,31 @@ def _read(path: Path, **kw) -> pd.DataFrame:
     return pd.read_csv(path, **kw)
 
 
+def basket_route_by_segment(final: pd.DataFrame, seg_of: pd.DataFrame) -> dict:
+    """How Layer 4 split each group: route A (low basket) or route B (normal basket), by average basket against the threshold.
+
+    The threshold is the engine's own (`uplift_engine.py`, "Data-adaptive basket thresholds"): the configured `low_basket_threshold`, or the
+    10th percentile of the stores's average baskets when their median is under it. Out-of-stock customers are stopped before the route is
+    decided, so they are counted apart. A run without `avg_spent` gives nothing (the group simply has no route numbers).
+    """
+    if "avg_spent" not in final.columns:
+        return {}
+    from business_config import CONFIG  # the engine's own setting (src/ is on the path)
+
+    baskets = final["avg_spent"].astype(float)
+    adaptive = bool(baskets.quantile(0.50) < CONFIG["low_basket_threshold"])
+    threshold = float(baskets.quantile(0.10)) if adaptive else float(CONFIG["low_basket_threshold"])
+    both = final.assign(customer_id=final["customer_id"].astype(str)).merge(
+        seg_of.assign(customer_id=seg_of["customer_id"].astype(str))[["customer_id", "segment_name"]], on="customer_id", how="inner")
+    out = {}
+    for name, g in both.groupby("segment_name"):
+        stock_out = g["recommended_action"] == "Do Nothing (Out of Stock)"
+        low = (~stock_out) & (g["avg_spent"].astype(float) < threshold)
+        out[str(name)] = {"low": int(low.sum()), "normal": int(((~stock_out) & ~low).sum()), "out_of_stock": int(stock_out.sum()),
+                          "threshold": round(threshold, 2), "adaptive": adaptive}
+    return out
+
+
 def build_layers(directory: Path, log: str, month: str, generated_at: str) -> dict:
     """Layers 1-4 of a finished run, in the shape of Dera AI's `plans/<month>/analysis`, from the files the pipeline left."""
     rfm = _read(directory / "layer1_dual_valuation.csv")
@@ -88,13 +113,15 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
     merged = seg_of.merge(rfm[["customer_id", "recency", "frequency", "monetary"]], on="customer_id", how="left")
     promos = json.loads((directory / "segments_latest.json").read_text(encoding="utf-8")).get("segments", [])
     by_name = {str(p.get("name")): p for p in promos}  # Layer 4's own numbers per group, as Dera AI names them below
+    final = _read(directory / "final_campaign_engine_output.csv")
+    routes = basket_route_by_segment(final, seg_of)
     segments = []
     for name, g in merged.groupby("segment_name", sort=True):
         decided = by_name.get(str(name), {})
         segments.append({"segment_name": str(name), "customer_count": int(len(g)), "avg_recency_days": round(float(g["recency"].mean()), 2),
                          "avg_frequency": round(float(g["frequency"].mean()), 2), "avg_monetary": round(float(g["monetary"].mean()), 2),
                          "broadcast_count": decided.get("broadcast"), "suppressed_count": decided.get("suppressed"),
-                         "l4_action_breakdown": decided.get("action_breakdown")})
+                         "l4_action_breakdown": decided.get("action_breakdown"), "basket_route": routes.get(str(name))})
     sil = re.search(r"Silhouette=([0-9.]+)", log)
     outl = re.search(r"ออกไป (\d+) รายการ", log)
     layer1 = {"k": int(rfm["kmeans_cluster"].nunique()), "silhouette": float(sil.group(1)) if sil else None, "customers": int(len(rfm)),
@@ -105,7 +132,6 @@ def build_layers(directory: Path, log: str, month: str, generated_at: str) -> di
     offers = [{"segment": str(s.get("name")), "offer": str(s.get("recommended_promo")), "basis": None} for s in promos if s.get("recommended_promo")]
     layer2 = {"bundles": bundles, "offers": offers}
 
-    final = _read(directory / "final_campaign_engine_output.csv")
     flags = _read(directory / "layer3_context_flags.csv").drop_duplicates("product_name")
     products = [{"product": str(r.product_name), "remaining": None if pd.isna(r.remaining_stock) else float(r.remaining_stock), "inStock": bool(r.in_stock)} for r in flags.itertuples()]
     products.sort(key=lambda p: (p["inStock"], p["remaining"] if p["remaining"] is not None else 0, p["product"]))
