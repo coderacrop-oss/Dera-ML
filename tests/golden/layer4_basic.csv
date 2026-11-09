@@ -2,16 +2,16 @@ customer_id,recommended_action,expected_profit,should_send
 c000,Do Nothing (Do Not Disturb),3.7,0
 c001,Do Nothing (Do Not Disturb),3.75,0
 c002,Do Nothing (Do Not Disturb),4.71,0
-c003,Loyalty Nurture: แต้มสะสม,4.12,1
+c003,VIP Win-Back: กลับมาเป็น VIP อีกครั้ง,-0.86,1
 c004,Do Nothing (Do Not Disturb),4.05,0
 c005,Do Nothing (Low Basket Size),2.68,0
 c006,Do Nothing (Low Basket Size),2.35,0
-c007,Do Nothing (Do Not Disturb),5.39,0
+c007,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.77,1
 c008,Do Nothing (Do Not Disturb),4.2,0
-c009,Do Nothing (No Profitable Action),4.54,0
+c009,Loyalty Nurture: แต้มสะสม,-0.07,1
 c010,Do Nothing (Low Basket Size),2.7,0
 c011,Do Nothing (Do Not Disturb),4.9,0
-c012,Do Nothing (Do Not Disturb),2.95,0
+c012,กลับมาช้อป: ซื้อ [cake] คู่กับ [coffee] ลด 15% ลด 20%,-1.8,1
 c013,Do Nothing (Do Not Disturb),5.56,0
 c014,Do Nothing (Do Not Disturb),3.42,0
 c015,Do Nothing (Do Not Disturb),4.61,0
@@ -23,8 +23,8 @@ c020,Do Nothing (Do Not Disturb),3.58,0
 c021,Do Nothing (Do Not Disturb),5.67,0
 c022,Do Nothing (Do Not Disturb),4.06,0
 c023,Do Nothing (Do Not Disturb),3.73,0
-c024,Loyalty Nurture: แต้มสะสม,9.14,1
-c025,Do Nothing (Do Not Disturb),4.56,0
+c024,Loyalty Nurture: แต้มสะสม,0.95,1
+c025,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-2.72,1
 c026,Do Nothing (Do Not Disturb),4.09,0
 c027,Do Nothing (Do Not Disturb),3.58,0
 c028,Do Nothing (Do Not Disturb),4.36,0
@@ -41,7 +41,7 @@ c038,Do Nothing (Do Not Disturb),6.08,0
 c039,Do Nothing (Do Not Disturb),6.06,0
 c040,Do Nothing (Low Basket Size),3.08,0
 c041,Do Nothing (Do Not Disturb),4.74,0
-c042,Loyalty Nurture: แต้มสะสม,4.07,1
+c042,VIP Win-Back: กลับมาเป็น VIP อีกครั้ง,-1.08,1
 c043,Do Nothing (Do Not Disturb),6.64,0
 c044,Do Nothing (Low Basket Size),2.34,0
 c045,Do Nothing (Do Not Disturb),3.55,0
@@ -50,7 +50,7 @@ c047,Do Nothing (Do Not Disturb),5.41,0
 c048,Do Nothing (Do Not Disturb),6.45,0
 c049,Do Nothing (Do Not Disturb),5.74,0
 c050,Do Nothing (Do Not Disturb),4.49,0
-c051,Loyalty Nurture: แต้มสะสม,6.16,1
+c051,Loyalty Nurture: แต้มสะสม,0.28,1
 c052,Do Nothing (Do Not Disturb),3.6,0
 c053,Do Nothing (Do Not Disturb),6.67,0
 c054,Do Nothing (Do Not Disturb),4.32,0
@@ -64,10 +64,10 @@ c061,Do Nothing (Do Not Disturb),5.31,0
 c062,Do Nothing (Do Not Disturb),3.52,0
 c063,Do Nothing (Do Not Disturb),5.67,0
 c064,Do Nothing (Do Not Disturb),6.55,0
-c065,Do Nothing (No Profitable Action),4.9,0
+c065,VIP Win-Back: กลับมาเป็น VIP อีกครั้ง,-1.67,1
 c066,Do Nothing (Do Not Disturb),3.68,0
-c067,Do Nothing (Do Not Disturb),7.05,0
-c068,Loyalty Nurture: แต้มสะสม,4.12,1
+c067,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.59,1
+c068,Loyalty Nurture: แต้มสะสม,0.37,1
 c069,Do Nothing (Do Not Disturb),4.41,0
 c070,Do Nothing (Do Not Disturb),5.95,0
 c071,Do Nothing (Do Not Disturb),4.52,0
@@ -77,7 +77,7 @@ c074,Do Nothing (Do Not Disturb),6.22,0
 c075,Do Nothing (Do Not Disturb),7.01,0
 c076,Do Nothing (Do Not Disturb),4.85,0
 c077,Do Nothing (Do Not Disturb),4.25,0
-c078,Loyalty Nurture: แต้มสะสม,4.1,1
+c078,Loyalty Nurture: แต้มสะสม,0.16,1
 c079,Do Nothing (Do Not Disturb),4.56,0
 c080,Do Nothing (Do Not Disturb),4.15,0
 c081,Do Nothing (Do Not Disturb),3.59,0
@@ -87,7 +87,7 @@ c084,Do Nothing (Do Not Disturb),3.97,0
 c085,Do Nothing (Do Not Disturb),4.98,0
 c086,Do Nothing (Do Not Disturb),5.36,0
 c087,Do Nothing (Do Not Disturb),5.69,0
-c088,Do Nothing (No Profitable Action),4.54,0
+c088,Loyalty Nurture: แต้มสะสม,-0.07,1
 c089,Do Nothing (Do Not Disturb),5.21,0
 c090,Do Nothing (Do Not Disturb),4.22,0
 c091,Do Nothing (Do Not Disturb),5.34,0
@@ -98,15 +98,15 @@ c095,Do Nothing (Do Not Disturb),7.01,0
 c096,Do Nothing (Do Not Disturb),5.04,0
 c097,Do Nothing (Do Not Disturb),4.11,0
 c098,Do Nothing (Do Not Disturb),4.56,0
-c099,Do Nothing (No Profitable Action),4.5,0
-c100,Do Nothing (No Profitable Action),4.86,0
+c099,Loyalty Nurture: แต้มสะสม,-0.07,1
+c100,Loyalty Nurture: แต้มสะสม,-0.07,1
 c101,Do Nothing (Do Not Disturb),6.05,0
 c102,Do Nothing (Do Not Disturb),7.63,0
 c103,Do Nothing (Do Not Disturb),4.76,0
 c104,Do Nothing (Do Not Disturb),3.26,0
 c105,Do Nothing (Do Not Disturb),4.27,0
 c106,Do Nothing (Do Not Disturb),4.11,0
-c107,Loyalty Nurture: แต้มสะสม,4.14,1
+c107,Loyalty Nurture: แต้มสะสม,0.17,1
 c108,Do Nothing (Do Not Disturb),5.01,0
 c109,Do Nothing (Do Not Disturb),5.91,0
 c110,Do Nothing (Do Not Disturb),7.95,0
@@ -116,6 +116,6 @@ c113,Do Nothing (Do Not Disturb),4.56,0
 c114,Do Nothing (Do Not Disturb),3.63,0
 c115,Do Nothing (Do Not Disturb),5.37,0
 c116,Do Nothing (Do Not Disturb),5.12,0
-c117,Do Nothing (Do Not Disturb),5.81,0
+c117,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.26,1
 c118,Do Nothing (Do Not Disturb),5.62,0
 c119,Do Nothing (Do Not Disturb),4.8,0

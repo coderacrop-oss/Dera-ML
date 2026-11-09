@@ -113,6 +113,7 @@ class PromoSpec:
     end_date:       str | None               = None
     force:          bool                     = False
     tie_threshold:  float                    = 0.10  # within 10% → conservative, keep operator
+    min_spend:      float                    = 0.0   # minimum purchase to redeem promo (0 = no minimum)
 
 
 # ── CFO Guardrail applied to operator promo ──────────────────────────────────
@@ -143,6 +144,12 @@ def _promo_profit_per_customer(
     """
     avg_spent = float(row.get("avg_spent", 0.0))
     if avg_spent <= 0:
+        return False, 0.0, 0.0
+
+    # min_spend enforcement: if customer's avg basket < minimum purchase requirement,
+    # they're unlikely to qualify for the promo → not viable.
+    # We do NOT upsell speculatively — conservative approach.
+    if spec.min_spend > 0 and avg_spent < spec.min_spend:
         return False, 0.0, 0.0
 
     # gross_margin always uses full avg_spent — if the promo drives a visit,
@@ -199,10 +206,15 @@ def evaluate_operator_promo(
         df["promo_eligible"] = True
     elif spec.target == "segment" and spec.segments:
         seg_lower = {s.lower().strip() for s in spec.segments}
-        df["promo_eligible"] = df.get(
-            "cluster_segment_name",
-            df.get("tier", pd.Series("", index=df.index))
-        ).str.lower().str.strip().isin(seg_lower)
+        # decide_for_customers outputs "cluster_segment" (not "cluster_segment_name")
+        seg_col = next(
+            (c for c in ("cluster_segment", "cluster_segment_name", "tier") if c in df.columns),
+            None,
+        )
+        if seg_col:
+            df["promo_eligible"] = df[seg_col].str.lower().str.strip().isin(seg_lower)
+        else:
+            df["promo_eligible"] = False
     elif isinstance(spec.target, list):
         target_set = {str(x) for x in spec.target}
         df["promo_eligible"] = df["customer_id"].astype(str).isin(target_set)
@@ -279,6 +291,8 @@ def evaluate_operator_promo(
             cost = row["operator_promo_cost"]
             if avg <= 0:
                 return "avg_spent = 0"
+            if spec.min_spend > 0 and avg < spec.min_spend:
+                return f"avg_spent ฿{avg:.0f} < min_spend ฿{spec.min_spend:.0f} (basket substitution risk)"
             margin = (avg * (1 - cogs_rate) - cost) / avg
             if margin < min_margin:
                 return f"net margin {margin:.1%} < floor {min_margin:.0%}"
@@ -621,8 +635,12 @@ def analyze_promo_history(
         # Aggregate to customer level first
         cid_col = "customer_id" if "customer_id" in pos_df.columns else pos_df.index.name or "index"
         grp_cols = [cid_col]
-        if "cluster_segment_name" in pos_df.columns:
-            grp_cols.append("cluster_segment_name")
+        seg_col_pos = next(
+            (c for c in ("cluster_segment", "cluster_segment_name") if c in pos_df.columns),
+            None,
+        )
+        if seg_col_pos:
+            grp_cols.append(seg_col_pos)
 
         cust = (
             pos_df.groupby(grp_cols)
@@ -650,9 +668,13 @@ def analyze_promo_history(
                 "lift":         lift,
             }
 
-            if "cluster_segment_name" in cust.columns:
+            _seg_col = next(
+                (c for c in ("cluster_segment", "cluster_segment_name") if c in cust.columns),
+                None,
+            )
+            if _seg_col:
                 seg_stats = {}
-                for seg, grp in cust.groupby("cluster_segment_name"):
+                for seg, grp in cust.groupby(_seg_col):
                     t = grp[grp["promo_applied"] == 1]
                     c = grp[grp["promo_applied"] == 0]
                     if len(t) >= 5 and len(c) >= 5:
@@ -1011,6 +1033,223 @@ def multi_promo_advisor(
         "cannibalization_applied": apply_cannibalization,
     }
     return resolved, report
+
+
+# ── 4. Feedback Loop — record actual outcomes & calibrate ────────────────────
+
+def record_campaign_outcome(
+    campaign_df: pd.DataFrame,
+    actual_pos_df: pd.DataFrame,
+    history_path: str,
+    campaign_id: str | None = None,
+    observation_days: int = 30,
+) -> dict:
+    """Record actual post-campaign outcomes and compare to predictions.
+
+    Call this after receiving POS data from the period following a campaign.
+    Results are appended to promo_history.jsonl for future calibration.
+
+    Parameters
+    ----------
+    campaign_df : DataFrame
+        Output from promo_advisor() or campaign_planner — must have:
+        customer_id, final_should_send (or should_send), expected_profit (or final_profit)
+    actual_pos_df : DataFrame
+        Post-campaign POS transactions — must have:
+        customer_id, timestamp (or transaction_date), total_price
+    history_path : str
+        Path to promo_history.jsonl (same file used by promo_advisor)
+    campaign_id : str, optional
+        Label for this campaign run (default: ISO timestamp)
+    observation_days : int
+        How many days after send date to count as "returned" (default 30)
+
+    Returns
+    -------
+    dict — calibration report with predicted vs actual comparison
+    """
+    cid_col  = "customer_id"
+    send_col = next((c for c in ["final_should_send", "should_send"] if c in campaign_df.columns), None)
+    pred_col = next((c for c in ["final_profit", "expected_profit"] if c in campaign_df.columns), None)
+    ts_col   = next((c for c in ["timestamp", "transaction_date"] if c in actual_pos_df.columns), None)
+    amt_col  = next((c for c in ["total_price", "amount"] if c in actual_pos_df.columns), None)
+
+    if send_col is None or pred_col is None:
+        raise ValueError("campaign_df must have should_send and expected_profit columns")
+    if ts_col is None or amt_col is None:
+        raise ValueError("actual_pos_df must have timestamp and total_price columns")
+
+    # Customers who were sent a promo
+    sent = campaign_df[campaign_df[send_col] == 1][[cid_col, pred_col]].copy()
+    sent[cid_col] = sent[cid_col].astype(str)
+
+    # Actual post-campaign transactions
+    pos = actual_pos_df[[cid_col, ts_col, amt_col]].copy()
+    pos[cid_col] = pos[cid_col].astype(str)
+
+    # Count returning customers + actual spend
+    returning = (
+        pos[pos[cid_col].isin(set(sent[cid_col]))]
+        .groupby(cid_col)[amt_col]
+        .agg(actual_visits="count", actual_spend="sum")
+        .reset_index()
+    )
+
+    merged = sent.merge(returning, on=cid_col, how="left")
+    merged["returned"]      = merged["actual_visits"].notna()
+    merged["actual_spend"]  = merged["actual_spend"].fillna(0.0)
+    merged["actual_visits"] = merged["actual_visits"].fillna(0).astype(int)
+
+    n_sent      = len(sent)
+    n_returned  = int(merged["returned"].sum())
+    return_rate = round(n_returned / n_sent, 4) if n_sent > 0 else 0.0
+
+    # Predicted vs actual profit (actual = spend × gross margin proxy 0.5 − promo_cost est.)
+    # We can't know exact COGS from this side, so use actual_spend as a proxy
+    predicted_total = round(float(merged[pred_col].sum()), 2)
+    actual_spend_total = round(float(merged["actual_spend"].sum()), 2)
+
+    # Calibration: ratio of actual_spend to predicted_profit
+    # If ratio > 1 → model was conservative, if < 1 → model was optimistic
+    calibration_ratio = round(actual_spend_total / predicted_total, 4) if predicted_total > 0 else None
+
+    report = {
+        "campaign_id":        campaign_id or datetime.now().isoformat(),
+        "recorded_at":        datetime.now().isoformat(),
+        "observation_days":   observation_days,
+        "n_sent":             n_sent,
+        "n_returned":         n_returned,
+        "return_rate":        return_rate,
+        "predicted_profit":   predicted_total,
+        "actual_spend_total": actual_spend_total,
+        "calibration_ratio":  calibration_ratio,
+        "calibration_note": (
+            "โมเดลประมาณต่ำกว่าความเป็นจริง" if (calibration_ratio or 0) > 1.2
+            else "โมเดลประมาณสูงกว่าความเป็นจริง" if (calibration_ratio or 0) < 0.8
+            else "โมเดลประมาณค่อนข้างตรง"
+        ),
+        "per_customer_avg_actual_spend": round(actual_spend_total / n_returned, 2) if n_returned > 0 else 0.0,
+        "type": "outcome_feedback",
+    }
+
+    # Append to history
+    os.makedirs(os.path.dirname(os.path.abspath(history_path)), exist_ok=True)
+    with open(history_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(report, ensure_ascii=False) + "\n")
+
+    _print_outcome_report(report)
+    return report
+
+
+def get_calibration_stats(history_path: str) -> dict:
+    """Read promo_history.jsonl and summarise model calibration over time.
+
+    Returns
+    -------
+    dict with:
+        n_feedback_runs     : number of outcome feedback records
+        avg_return_rate     : average customer return rate across campaigns
+        avg_calibration     : average calibration_ratio (1.0 = perfect)
+        trend               : "improving" | "stable" | "degrading" | "insufficient_data"
+        recommendation      : plain-text action for the operator
+    """
+    if not os.path.exists(history_path):
+        return {"n_feedback_runs": 0, "recommendation": "ยังไม่มีข้อมูล feedback"}
+
+    entries = []
+    with open(history_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                if e.get("type") == "outcome_feedback":
+                    entries.append(e)
+            except Exception:
+                pass
+
+    if not entries:
+        return {"n_feedback_runs": 0, "recommendation": "ยังไม่มีข้อมูล outcome feedback — เรียก record_campaign_outcome() หลังแคมเปญ"}
+
+    ratios       = [e["calibration_ratio"] for e in entries if e.get("calibration_ratio")]
+    return_rates = [e["return_rate"] for e in entries if e.get("return_rate") is not None]
+
+    avg_calib  = round(float(np.mean(ratios)), 4)       if ratios       else None
+    avg_return = round(float(np.mean(return_rates)), 4) if return_rates else None
+
+    # Trend: compare last half vs first half of runs
+    trend = "insufficient_data"
+    if len(ratios) >= 4:
+        mid   = len(ratios) // 2
+        early = float(np.mean(ratios[:mid]))
+        late  = float(np.mean(ratios[mid:]))
+        diff  = late - early
+        if abs(diff) < 0.05:
+            trend = "stable"
+        elif diff > 0:
+            trend = "improving"   # ratio trending toward 1.0 from below
+        else:
+            trend = "degrading"   # ratio drifting further from 1.0
+
+    # Recommendation: trend overrides avg when degrading — even if avg looks ok,
+    # a consistent downward trend signals model drift that needs action now.
+    if avg_calib is None:
+        rec = "ยังไม่มีข้อมูลเพียงพอ"
+    elif trend == "degrading":
+        rec = "⚠️ โมเดลแม่นยำลดลงต่อเนื่อง — ควร retrain โดยเร็ว (model drift detected)"
+    elif avg_calib < 0.7:
+        rec = "โมเดลประมาณ profit สูงเกินจริงมาก — ควร retrain หรือลด discount_rate ลง"
+    elif avg_calib < 0.85:
+        rec = "โมเดลประมาณสูงกว่าจริงเล็กน้อย — ติดตามอีก 2-3 แคมเปญก่อน retrain"
+    elif avg_calib > 1.3:
+        rec = "โมเดลประมาณ profit ต่ำเกินจริง — อาจเพิ่ม discount_rate หรือขยาย target ได้"
+    else:
+        rec = "โมเดลประมาณค่อนข้างตรง — ไม่ต้อง retrain ในตอนนี้"
+
+    return {
+        "n_feedback_runs":      len(entries),
+        "avg_return_rate":      avg_return,
+        "avg_calibration_ratio": avg_calib,
+        "trend":                trend,
+        "recommendation":       rec,
+        "last_run_at":          entries[-1].get("recorded_at"),
+    }
+
+
+def _print_outcome_report(report: dict, currency: str = "฿") -> None:
+    sep = "─" * 56
+    c   = currency
+    print(f"\n{sep}")
+    print(f"  Campaign Outcome — Feedback Loop")
+    print(f"  Campaign: {report['campaign_id']}")
+    print(sep)
+    print(f"  ส่งโปร:        {report['n_sent']:,} คน")
+    print(f"  กลับมาจริง:   {report['n_returned']:,} คน  ({report['return_rate']:.1%})")
+    print(f"  คาด profit:   {c}{report['predicted_profit']:,.2f}")
+    print(f"  spend จริง:   {c}{report['actual_spend_total']:,.2f}")
+    if report["calibration_ratio"]:
+        print(f"  calibration:  {report['calibration_ratio']:.2f}x  → {report['calibration_note']}")
+    print(f"{sep}\n")
+
+
+def print_calibration_report(stats: dict, currency: str = "฿") -> None:
+    sep = "─" * 56
+    print(f"\n{sep}")
+    print(f"  Model Calibration Report  ({stats['n_feedback_runs']} campaigns)")
+    print(sep)
+    if stats["n_feedback_runs"] == 0:
+        print(f"  {stats['recommendation']}")
+        print(f"{sep}\n")
+        return
+    if stats.get("avg_return_rate") is not None:
+        print(f"  Avg return rate:       {stats['avg_return_rate']:.1%}")
+    if stats.get("avg_calibration_ratio") is not None:
+        print(f"  Avg calibration ratio: {stats['avg_calibration_ratio']:.2f}x  "
+              f"(1.0 = perfect)")
+    print(f"  Trend:                 {stats['trend']}")
+    print(f"\n  คำแนะนำ: {stats['recommendation']}")
+    print(f"{sep}\n")
 
 
 def print_multi_promo_report(report: dict, currency: str = "฿") -> None:

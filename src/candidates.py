@@ -208,6 +208,26 @@ def evaluate_candidate(pooled, challenger, champion, champion_ref, training_meta
             growth_pct=gate.growth_pct,
         )
 
+    # ── AUUC negative gate ────────────────────────────────────────────────────
+    # A negative AUUC means the model's top-ranked customers respond *worse*
+    # than random targeting — the uplift ordering is inverted.  Approving such
+    # a model would systematically send promos to the wrong people.
+    if (
+        pooled.label_mode == "real"
+        and isinstance(uplift_m.get("auuc"), (int, float))
+        and uplift_m["auuc"] < 0
+        and gate.passed
+    ):
+        from uplift_engine import GateResult
+        gate = GateResult(
+            passed=False,
+            reason=(
+                f"❌ [AUUC] AUUC = {uplift_m['auuc']:.4f} (negative) — model performs "
+                "worse than random targeting; champion blocked until retrain"
+            ),
+            growth_pct=gate.growth_pct,
+        )
+
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "compared_against_version": champion_ref.version if champion_ref else None,

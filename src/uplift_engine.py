@@ -484,10 +484,70 @@ def _normalize_to_pos_format(file_path: str) -> str:
     if 'transaction_id' not in df.columns:
         df['transaction_id'] = df['invoice_id']
 
+    # MeriPOS Transaction Report — "Bill Opens" is the timestamp signal
+    if "Bill Opens" in df.columns or "Receipt number" in df.columns:
+        return _normalize_meripos(file_path)
+
     out_path = 'data/processed/normalized_for_layer4.csv'
     os.makedirs('data/processed', exist_ok=True)
     df.to_csv(out_path, index=False)
     print(f"📄 [Layer 4] Normalized {len(df):,} rows → {out_path}")
+    return out_path
+
+
+def _normalize_meripos(file_path: str) -> str:
+    """Normalise a MeriPOS Transaction Report to standard POS format.
+
+    Customer identity strategy:
+      1. Rows where Customer column contains a phone/name → use as customer_id.
+      2. Anonymous rows → customer_id = "anon_<receipt_number>" (receipt-level proxy).
+         These still contribute to store-level analytics but RFM will be noisy.
+    """
+    from ingest import ingest_meripos, _NULL_SENTINELS
+
+    tx_df, _ = ingest_meripos(file_path, filter_test=True)
+
+    if tx_df.empty:
+        raise ValueError("MeriPOS file produced no rows after test-data filtering.")
+
+    # Map to standard columns
+    out = pd.DataFrame()
+    out["timestamp"]      = pd.to_datetime(tx_df.get("timestamp"), errors="coerce")
+    out["total_price"]    = pd.to_numeric(tx_df.get("net_sales", tx_df.get("total_price", 0)), errors="coerce").fillna(0)
+    out["transaction_id"] = tx_df.get("receipt_id", pd.RangeIndex(len(tx_df)).astype(str))
+
+    # customer_id: phone-linked rows first, then receipt proxy
+    if "customer_raw" in tx_df.columns:
+        linked = tx_df["customer_raw"].notna() & ~tx_df["customer_raw"].astype(str).str.strip().isin(_NULL_SENTINELS)
+        out["customer_id"] = tx_df["customer_raw"].where(linked)
+    else:
+        linked = pd.Series([False] * len(tx_df))
+        out["customer_id"] = None
+
+    # Fill anonymous rows with receipt proxy
+    anon_mask = out["customer_id"].isna()
+    receipt_ids = tx_df.get("receipt_id", pd.RangeIndex(len(tx_df)).astype(str))
+    out.loc[anon_mask, "customer_id"] = "anon_" + receipt_ids[anon_mask].astype(str)
+
+    # Optional columns
+    if "product_name" in tx_df.columns:
+        out["product_name"] = tx_df["product_name"]
+    if "discount_amount" in tx_df.columns:
+        out["discount_amount"] = tx_df["discount_amount"]
+
+    out = out.dropna(subset=["timestamp", "total_price"])
+    out = out[out["total_price"] > 0].reset_index(drop=True)
+    out["transaction_id"] = out["transaction_id"].astype(str)
+
+    linked_count = int((~anon_mask).sum())
+    print(
+        f"📄 [MeriPOS] Normalised {len(out):,} rows "
+        f"({linked_count:,} phone-linked, {len(out) - linked_count:,} anonymous)"
+    )
+
+    out_path = "data/processed/normalized_for_layer4.csv"
+    os.makedirs("data/processed", exist_ok=True)
+    out.to_csv(out_path, index=False)
     return out_path
 
 
@@ -679,6 +739,9 @@ class Layer4Context:
     label_mode: str  # "real" (promotion-response labels) | "proxy" (temporal-split + random treatment)
     cluster_bundle_map: dict = field(default_factory=dict)   # {cluster_id(int): bundle_str}
     cluster_segment_map: dict = field(default_factory=dict)  # {cluster_id(int): segment_name}
+    store_profile: object = None    # StoreProfile | None — built from anonymous data (Phase 1)
+    quality_gate_result: dict = field(default_factory=dict)   # output of ingest.quality_gate()
+    store_embedding: object = None  # np.ndarray shape (38,) | None — from get_store_embedding() (AC-4.2)
 
 
 def build_serving_context(pos_file_path, promo_response_path=None, product_cogs_dict=None, default_cogs=None):
@@ -975,12 +1038,16 @@ def build_action_menu(
     bundle_name: str = "",
     rescue: bool = False,
     clv_at_risk: float = 0.0,
-) -> tuple[str, float, str]:
+) -> tuple[str, float, float, str]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
     who passed Step 1 (persuadable or sure_thing).
 
     Rules are defined declaratively in src/action_rules.py.
+
+    Returns (action, incremental_profit, promo_cost, send_window).
+    incremental_profit = gross_margin × (p_treated − p_baseline) − promo_cost
+    for all promo types — consistent formula for ROI comparisons.
 
     Two strategies:
       sure_thing   — SURE_THING_RULES evaluated in order; first profitable action wins.
@@ -1006,23 +1073,34 @@ def build_action_menu(
     p_treated       = max(0.0, min(1.0, prob_control + uplift))
     baseline_profit = round(gross_margin * p_baseline, 2)
 
+    def _incremental(rate_key: str) -> tuple[bool, float, float, float]:
+        """Compute incremental profit = gross_margin × (p_treated − p_baseline) − promo_cost.
+
+        Returns (viable, incremental_profit, gross_margin_val, promo_cost).
+        Used consistently across all promo types so ROI comparisons are meaningful.
+        """
+        cost_rate         = PROMO_COST_RATES[rate_key]
+        promo_cost        = avg_spent * cost_rate
+        gross_rev         = avg_spent * (1 - CONFIG["default_discount_rate"])
+        net_profit        = gross_rev - avg_spent * cogs - promo_cost
+        net_margin        = net_profit / gross_rev if gross_rev > 0 else 0
+        incremental_profit = round(gross_margin * (p_treated - p_baseline) - promo_cost, 2)
+        return (net_margin >= MIN_MARGIN and incremental_profit > 0), incremental_profit, round(gross_margin, 2), round(promo_cost, 2)
+
     def _viable(rate_key: str) -> tuple[bool, float, float]:
-        cost_rate   = PROMO_COST_RATES[rate_key]
-        promo_cost  = avg_spent * cost_rate
-        gross_rev   = avg_spent * (1 - CONFIG["default_discount_rate"])
-        net_profit  = gross_rev - avg_spent * cogs - promo_cost
-        net_margin  = net_profit / gross_rev if gross_rev > 0 else 0
-        incremental = gross_margin * (p_treated - p_baseline) - promo_cost
-        profit      = round(gross_margin * p_treated - promo_cost, 2)
-        return (net_margin >= MIN_MARGIN and incremental > 0), profit, round(promo_cost, 2)
+        ok, inc_profit, _gm, promo_cost = _incremental(rate_key)
+        return ok, inc_profit, promo_cost
 
     def _viable_loyalty(rate_key: str) -> tuple[bool, float, float]:
         """Sure Things convert regardless — don't require incremental > 0.
-        Only check that the promo cost doesn't eliminate baseline profit."""
+        Only check that the promo cost doesn't eliminate baseline profit.
+        Uses incremental formula for consistent ROI reporting."""
+        ok, inc_profit, _gm, promo_cost = _incremental(rate_key)
+        # Sure Things: viable if baseline profit covers promo cost
         cost_rate  = PROMO_COST_RATES[rate_key]
         promo_cost = avg_spent * cost_rate
-        profit     = round(gross_margin * p_baseline - promo_cost, 2)
-        return profit > 0, profit, round(promo_cost, 2)
+        baseline_ok = (gross_margin * p_baseline - promo_cost) > 0
+        return baseline_ok, inc_profit, round(promo_cost, 2)
 
     def _viable_clv(rate_key: str) -> tuple[bool, float, float]:
         """Rescue tiers: justified when promo_cost ≤ CLV-at-risk AND baseline profitable.
@@ -1031,8 +1109,9 @@ def build_action_menu(
             return _viable_loyalty(rate_key)
         cost_rate  = PROMO_COST_RATES[rate_key]
         promo_cost = avg_spent * cost_rate
-        profit     = round(gross_margin * p_baseline - promo_cost, 2)
-        return (promo_cost <= clv_at_risk and profit > 0), profit, round(promo_cost, 2)
+        _ok, inc_profit, _gm, _pc = _incremental(rate_key)
+        baseline_ok = (gross_margin * p_baseline - promo_cost) > 0
+        return (promo_cost <= clv_at_risk and baseline_ok), inc_profit, round(promo_cost, 2)
 
     tier = cluster_tier(cluster_segment_name)
 
@@ -1180,11 +1259,17 @@ def decide_for_customers(model, ctx, customer_ids=None):
         cogs            = _product_cogs.get(top_prod, _default_cogs)
         gross_margin    = avg_spent * (1 - cogs)
         p_baseline      = max(0.0, prob_c)
+        p_treated       = max(0.0, min(1.0, prob_c + float(row['uplift_score'])))
         baseline_profit = round(gross_margin * p_baseline, 2)
+
+        def _s(action, profit, promo_cost, window, group="hard_stop", reason="hard_stop"):
+            """Build consistent 10-element Series for all return paths."""
+            return pd.Series([action, profit, 0, window, promo_cost, group, reason,
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
 
         # ── Step 1: Hard stops ────────────────────────────────────────────────
         if pd.isna(in_stock) or not in_stock:
-            return pd.Series(["Do Nothing (Out of Stock)", baseline_profit, 0, time_context, 0.0])
+            return _s("Do Nothing (Out of Stock)", baseline_profit, 0.0, time_context, reason="out_of_stock")
         if avg_spent < low_basket:
             from action_rules import cluster_tier as _cluster_tier
             tier = _cluster_tier(cluster_segment)
@@ -1196,40 +1281,38 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 m_cost   = m_basket * CONFIG["promo_cost_rates"]["milestone_reward"]
                 p_mile   = max(0.0, min(1.0, prob_c + uplift * 0.5))
                 if m_margin * (p_mile - p_baseline) - m_cost > 0:
-                    m_profit = round(m_margin * p_mile - m_cost, 2)
-                    return pd.Series([
-                        f"Milestone Reward: สั่งครบ {m_basket:.0f} บาท รับ {m_pts} แต้ม",
-                        m_profit, 0, time_context, round(m_cost, 2)
-                    ])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    m_profit = round(m_margin * (p_mile - p_baseline) - m_cost, 2)
+                    return _s(f"Milestone Reward: สั่งครบ {m_basket:.0f} บาท รับ {m_pts} แต้ม",
+                              m_profit, round(m_cost, 2), time_context, "sure_thing", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "new_customer":
                 w_cost   = avg_spent * CONFIG["promo_cost_rates"]["new_customer_welcome"]
-                w_profit = round(gross_margin * p_baseline - w_cost, 2)
+                w_profit = round(gross_margin * (p_treated - p_baseline) - w_cost, 2)
                 if w_profit > 0:
-                    return pd.Series(["Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, 0, time_context, round(w_cost, 2)])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    return _s("Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, round(w_cost, 2), time_context, "sure_thing", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "about_to_sleep":
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["standard"]
-                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, 0, time_context, round(r_cost, 2)])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    return _s("เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "hibernating":
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
-                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, 0, time_context, round(r_cost, 2)])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    return _s("Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier in ("churn_risk", "cant_lose"):
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["churn_rescue"]
-                r_profit = round(gross_margin * p_baseline - r_cost, 2)
+                r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return pd.Series(["Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, 0, time_context, round(r_cost, 2)])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    return _s("Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             else:
                 bundle_basket = avg_spent * 1.8
@@ -1237,9 +1320,9 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 bundle_cost   = bundle_basket * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
                 p_upsell      = max(0.0, min(1.0, prob_c + uplift * 0.4))
                 if bundle_margin * (p_upsell - p_baseline) - bundle_cost > 0 and cluster_bundle and not cluster_bundle.startswith("เซตคู่คุ้มค่า"):
-                    upsell_profit = round(bundle_margin * p_upsell - bundle_cost, 2)
-                    return pd.Series([f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, 0, time_context, round(bundle_cost, 2)])
-                return pd.Series(["Do Nothing (Low Basket Size)", baseline_profit, 0, time_context, 0.0])
+                    upsell_profit = round(bundle_margin * (p_upsell - p_baseline) - bundle_cost, 2)
+                    return _s(f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, round(bundle_cost, 2), time_context, "persuadable", "sent")
+                return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
         # ── Step 1: Uplift group classification ───────────────────────────────
         from action_rules import cluster_tier as _cluster_tier
@@ -1258,9 +1341,13 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 group = "persuadable"
                 rescue = True
             else:
-                return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0, time_context, 0.0])
+                return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0,
+                                   time_context, 0.0, group, "do_not_disturb: negative uplift",
+                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
         if group == "lost_cause":
-            return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0, time_context, 0.0])
+            return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0,
+                               time_context, 0.0, group, "lost_cause: uplift below threshold",
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
 
         # ── Step 2: Action menu (pre-validated profitable actions only) ───────
         action, profit, promo_cost, send_window = build_action_menu(
@@ -1283,17 +1370,27 @@ def decide_for_customers(model, ctx, customer_ids=None):
             _zc_tiers = {"champions", "loyal", "cant_lose", "potential_loyalist"}
             if rfm_seg >= _zc_rfm and tier in _zc_tiers and uplift >= _rescue_guard:
                 return pd.Series(["Zero-Cost: เราคิดถึงคุณ — ขอบคุณที่เป็นลูกค้าที่ดีของเรา",
-                                   baseline_profit, 0, time_context, 0.0])
-            return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0, time_context, 0.0])
+                                   baseline_profit, 0, time_context, 0.0, group, "zero_cost_eligible",
+                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+            return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0,
+                               time_context, 0.0, group, "no_profitable_action",
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
 
-        return pd.Series([action, profit, 0, send_window, promo_cost])
+        return pd.Series([action, profit, 0, send_window, promo_cost, group, "sent",
+                          round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
 
     res = temp_df.apply(calculate_action_and_profit, axis=1)
     temp_df['recommended_action'] = res[0]
-    temp_df['expected_profit']    = res[1]
+    temp_df['expected_profit']    = res[1]   # incremental_profit (consistent formula)
+    temp_df['incremental_profit'] = res[1]   # alias — explicit name for DERA API callers
     temp_df['guardrail_blocked']  = res[2]
     temp_df['send_window']        = res[3]
     temp_df['promo_cost']         = res[4]
+    temp_df['uplift_group']       = res[5]
+    temp_df['decision_reason']    = res[6]
+    temp_df['gross_margin']       = res[7]
+    temp_df['p_baseline']         = res[8]
+    temp_df['p_treated']          = res[9]
     temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
     temp_df['should_send'] = (
         (temp_df['guardrail_blocked'] == 0) &

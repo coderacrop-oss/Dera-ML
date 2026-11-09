@@ -7,7 +7,7 @@ import pytest
 import uplift_engine as l4
 from fixtures_pos import make_pos_csv
 
-GOLDEN = os.path.join(os.path.dirname(__file__), "golden", "layer4_basic.csv")
+GOLDEN = os.path.join(os.path.dirname(__file__), "golden", "layer4_direct.csv")
 COLS = ["customer_id", "recommended_action", "expected_profit", "should_send"]
 
 
