@@ -34,7 +34,7 @@ def _load_champion(registry: ModelRegistry):
 
 
 def _training_meta(inputs, pooled, holdout_frac, seed) -> dict:
-    ts = pd.concat([pd.to_datetime(c.raw_df["timestamp"], errors="coerce") for c in pooled.contexts.values()])
+    ts = pd.concat([pd.to_datetime(c.raw_df["timestamp"], errors="coerce", utc=True) for c in pooled.contexts.values()])
     return {"files": [{"store_id": i.store_id, "csv": os.path.basename(i.csv_path),
                        "labels": os.path.basename(i.labels_path) if i.labels_path else None} for i in inputs],
             "date_range": [str(ts.min()), str(ts.max())], "seed": seed, "holdout_frac": holdout_frac}

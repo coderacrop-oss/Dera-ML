@@ -2,7 +2,7 @@
 
 **Author:** Pennoung H.
 **Affiliation:** Codera Solutions
-**Version:** Draft v2.0 — Confidential
+**Version:** Draft v3.0 — Confidential
 **Date:** November 2026
 **Status:** Working Paper — Internal Review
 
@@ -21,7 +21,11 @@ These architectural changes raised the campaign send rate from **8.9% to 50.1%**
 
 The framework is evaluated on seven datasets: (1) a synthetic restaurant POS dataset (9,344 line items, 200 customers; silhouette = 0.679; k = 2; 0/200 broadcast — zero validates calibration on randomized treatment); (2) a public marketing campaign dataset (905 customers; silhouette = 0.306; k = 3; 338/905 broadcast, Δprofit = $9,224); (3) the Dunnhumby Complete Journey grocery dataset (2,500 households, 2,576,815 rows; silhouette = 0.595; k = 3; 72/2,500 broadcast, Δprofit = $3,207); (4) a UK online retail dataset (397,884 line items, 4,338 customers; silhouette = 0.931; k = 2; 19/4,338 broadcast, Δprofit = $2,529); (5) a purpose-built Layer 3 synthetic test dataset (500 customers; engineered demand-surge products; validates context detection stockout suppression — 23/500 customers correctly blocked from campaign dispatch on out-of-stock items); (6) the Hillstrom MineThatData RCT (64,000 customers, three randomized arms), used to evaluate pooled multi-treatment uplift on true randomized labels — yielding Qini = 0.1215, AUUC = 0.0614, and ATE calibration error of 9% on the holdout; and (7) a production dessert restaurant POS dataset (`dessert-ml.csv`, 2,409 customers, 27,767 rows, ~11 months), used for Champion v7 training (multi-dataset pool with Dunnhumby), achieving Qini = 1.21 and +3.56% gate improvement. A consistent finding is that naive broadcast campaigns produce model-estimated incremental profit *worse than running no campaign at all*; the CFO Guardrail converts money-losing broadcast scenarios into net-positive outcomes. All profit figures are model-estimated projections on synthetic or public datasets. Results demonstrate robustness across F&B, grocery, and e-commerce contexts.
 
-**Keywords:** MLOps, SME marketing, uplift modeling, X-learner, meta-learner, RFM segmentation, IBM segmentation, declarative action rules, campaign optimization, POS analytics, LightGBM, CFO guardrail, Champion-Challenger, rescue tiers, frequency trend
+**v3.0 additions:** DotDash loyalty connector, Hybrid RFM (full/partial/anonymous), 38-dim store embedding, PSM Mode C improved, hierarchical model tier (global/category/store), Champion v11 (PSM R-Learner), REST API (FastAPI), LINE OA Multicast, Meta Ads 6-step pipeline, campaign execution endpoint, 30-day automated outcome capture, retrain scheduler.
+
+**v3.0 extended abstract additions:** Version 3.0 extends the production system with three new technical layers beyond the core five-layer pipeline. First, a **DotDash Loyalty Connector** (`dotdash_connector.py`) enables the framework to ingest LINE OA-based member data from Thailand's DotDash CRM platform via cursor-pagination REST API, normalising Thai-language field names to standard columns and extracting LINE `user_id` for downstream broadcast targeting. A **Hybrid RFM builder** (`build_hybrid_rfm()`) synthesises standard RFM-ready customer representations across three data quality modes — `full` (phone join to MeriPOS), `partial` (join where possible plus synthetic synthesis), and `anonymous` (synthesise entirely from DotDash F/M/R aggregates) — producing an identical output format regardless of CRM linkage rate and enabling the core pipeline to operate without awareness of data quality mode. Second, a **38-dimensional store embedding** (`get_store_embedding()`) encodes each store's behavioral fingerprint — 24-dim hourly traffic pattern, 7-dim day-of-week distribution, 5-dim category mix, and 2 scalar features (discount depth, promo lift proxy) — enabling a **hierarchical model tier** architecture (`--model-tier global|category|store`) that selects the most specific trained model tier at inference time, with automatic fallback when store-level data is insufficient (< 12 months). **PSM Mode C** (the spike-based treatment proxy) is improved by filtering spikes to ±7-day windows around known campaign dates from `campaign_history.jsonl`, reducing false-positive treatment assignment from seasonal demand variation. The current production champion is **v11** (CausalForestDML R-Learner, PSM Mode A, 5 serving-aligned features, `baseline_control_prob = 0.647`), trained on synthetic DotDash data. Third, a **full execution layer** delivers campaigns directly to customers: `line_oa_client.py` auto-batches LINE Multicast API calls (500 user_id/batch limit), handling 429 rate-limiting with exponential backoff; `meta_ads_client.py` runs a 6-step Meta Ads pipeline (upload custom audience → lookalike → campaign → ad set → creative → ad) with SHA-256 hashed phone numbers and THB-to-USD conversion; a `POST /v1/campaign/execute` REST endpoint connects the ML plan to whichever channel the operator selects. A **production REST API** (`src/crm_api/`, FastAPI) exposes all pipeline capabilities — campaign planning, analysis, history, execution, audience export, content generation, model retraining, segment health — with Thai-language OpenAPI documentation enforced by CI tests. Finally, `retrain_scheduler.py` implements **automated 30-day outcome capture**: it reads `campaign_history.jsonl` for plans in `awaiting_outcome` status, computes pre/post campaign revenue lift from POS data, writes to `outcomes.jsonl`, advances plan status to `completed`, and calls `retrain_trigger.assess_retrain()` when enough outcomes accumulate — completing the ML feedback loop from campaign execution through model calibration entirely without operator intervention.
+
+**Keywords:** MLOps, SME marketing, uplift modeling, X-learner, meta-learner, RFM segmentation, IBM segmentation, declarative action rules, campaign optimization, POS analytics, LightGBM, CFO guardrail, Champion-Challenger, rescue tiers, frequency trend, DotDash CRM, Hybrid RFM, store embedding, PSM Mode C, hierarchical model, LINE OA, Meta Ads, campaign automation, outcome capture
 
 ---
 
@@ -71,6 +75,12 @@ The primary contributions of this work are:
 - **Post-campaign feedback loop (v1.15):** `holdout_evaluator.py` ingests actual post-campaign outcomes, computes statistically-tested conversion lift with 95% confidence intervals, and exports retrain-ready labeled data compatible with Layer 4's real label mode — closing the measurement loop from campaign deployment through model retraining (Section 4.6).
 - **Budget-constrained campaign targeting (Section 4.4.8):** A greedy knapsack optimizer (`budget_optimizer.py`) selects the profit-maximizing subset of CFO-approved customers within an operator-specified spend ceiling. Customers are ordered by bang-per-buck (expected_profit / promo_cost) and selected cumulatively — provably optimal for the **fractional** knapsack. For the **0/1 knapsack**, the algorithm achieves at least a **1/2-approximation** when combined with the option of selecting the single highest-profit customer as an alternative: *max(greedy result, best single item)* ≥ ½ × OPT — in O(n log n) time. When no budget ceiling is specified, all CFO-approved customers are selected unchanged. *(Implementation complete; empirical validation against a real campaign with a fixed budget ceiling is pending.)*
 - **Operator Promo Advisor (Section 4.4.11):** A two-phase coordination layer (`promo_advisor.py`) that subjects operator-planned promotions to the CFO guardrail at per-customer resolution — using an asymmetric spend-basis formulation that correctly scopes discount cost to the promoted category while crediting full-basket gross margin — and resolves conflicts against ML recommendations via type-group classification and a conservative tie-breaking rule that preserves operator intent when profit outcomes are within 10%. A three-scenario comparison framework (ML only / operator only / Promo Advisor optimal) quantifies the incremental value of coordination, while Phase 2 extensions add historical lift analysis, cannibalization risk adjustment, and multi-promo resolution across simultaneous promotional calendars. *(Implementation complete; empirical validation on real operator campaigns is pending.)*
+- **DotDash Loyalty Connector and Hybrid RFM Pipeline (Section 4.7):** `dotdash_connector.py` fetches LINE OA-based CRM member records via cursor-pagination REST API, normalises Thai-language field names, and extracts LINE `user_id` as `customer_id` for direct broadcast targeting. `build_hybrid_rfm()` synthesises standard RFM-ready representations in three modes — `full` (phone join), `partial` (join + synthetic), `anonymous` (synthesise entirely from DotDash F/M/R) — producing an identical output schema regardless of CRM linkage rate. `get_quality_report()` quantifies POS–CRM overlap and produces Thai-language operational recommendations. This architecture enables SMEs with low or zero phone linkage to still benefit from ML segmentation.
+- **38-Dimensional Store Embedding (Section 4.8):** `get_store_embedding(store_profile)` produces a deterministic fixed-length 38-dim float32 vector encoding each store's behavioral fingerprint (24-dim hourly traffic, 7-dim day-of-week, 5-dim category mix, discount depth, promo lift proxy). Stores with structurally different peak patterns have cosine similarity < 0.7, confirming the embedding captures meaningful business-behavioral distinctions. The embedding is attached to `Layer4Context` for use in hierarchical model tier selection.
+- **Hierarchical Model Tier and Improved PSM Mode C (Section 4.9):** `train_rlearner.py` accepts `--model-tier global|category|store`, with automatic fallback to a broader tier when store-level data is insufficient (< 12 months). PSM Mode C is improved by filtering treatment-proxy spikes to ±7-day windows around known campaign dates from `campaign_history.jsonl`, reducing false-positive treatment assignment from seasonal demand variation. Champion v11 (CausalForestDML R-Learner, PSM Mode A, 5 serving-aligned features, `baseline_ctrl = 0.647`) is the current production champion.
+- **Production REST API — FastAPI Campaign Intelligence Platform (Section 4.10):** A FastAPI REST service (`src/crm_api/`) exposes all pipeline capabilities under `/v1/` with append-only JSONL storage for campaign plans, outcomes, and segment snapshots. All 20 endpoints carry Thai-language OpenAPI documentation enforced by a CI test suite that validates Thai Unicode presence in every `summary`, `description`, `tag`, and `parameter.description` field. All endpoints except `GET /health` require `X-API-Key` authentication.
+- **Execution Layer: LINE OA and Meta Ads Integration (Section 4.11):** `line_oa_client.py` auto-batches LINE Multicast calls at the 500 user_id/request API limit, with exponential backoff on HTTP 429. `meta_ads_client.py` runs the full 6-step Meta Ads pipeline with SHA-256-hashed phone numbers (Thai normalization: `0812...` → `+66812...`) and THB-to-USD conversion. `POST /v1/campaign/execute` connects ML plan → channel selection → delivery, updating plan status to `awaiting_outcome` with delivery statistics and execution timestamp.
+- **Automated 30-Day Outcome Capture and Retrain Scheduler (Section 4.12):** `retrain_scheduler.py` implements the full post-campaign feedback loop: reads plans in `awaiting_outcome` status after a configurable window (default 30 days), computes pre/post revenue lift from POS data, writes outcomes to `outcomes.jsonl`, advances plan status to `completed`, and calls `retrain_trigger.assess_retrain()` when a minimum outcome count is reached — completing the ML feedback loop from execution through model calibration without operator intervention.
 - **CLV-informed rescue tier viability (Section 4.4.9):** A third viability function `_viable_clv()` conditions rescue campaign approval on `promo_cost ≤ clv_at_risk` — the expected revenue lost if the customer churns without intervention, estimated via a BG/NBD survival model (Beta-Geometric/Negative Binomial Distribution; Fader et al. 2005 [34]). This replaces the heuristic `_viable_loyalty` check for rescue tiers with a CLV-grounded financial justification. For high-frequency retail datasets where BG/NBD fails to converge (a known limitation for daily/weekly purchasing), the function falls back automatically to `_viable_loyalty`, preserving backward compatibility. *(Implementation complete; BG/NBD falls back to heuristic on all tested datasets — dessert-ml and Dunnhumby — due to high purchase frequency. Empirical CLV results are pending.)*
 - **Pooled multi-treatment uplift on a true RCT (Section 4.4.10, 5.1, 6.11):** A `PooledMultiTreatmentModel` trains a single X-learner with treatment arm encoded as one-hot features, sharing learning signal across arms rather than fitting separate one-vs-rest models. Evaluated on the Hillstrom MineThatData RCT [33] (64,000 customers, three balanced arms: no email / mens email / womens email). Results on holdout: Qini = 0.1215, AUUC = 0.0614, ATE calibration error of 9% (predicted +0.056 vs actual +0.062) — substantially lower than the 247% error observed under proxy-label training on retail datasets, where the absence of true randomization inflates apparent ATE discrepancy. Best-arm assignment: 68.7% mens email / 31.3% womens email, consistent with observed +7.7pp vs +4.5pp arm uplifts.
 
@@ -545,7 +555,9 @@ The gate report distinguishes three failure modes with plain-language explanatio
 
 Both champion and challenger models are serialized with timestamps and retained in an archive for full reproducibility and rollback capability.
 
-**Champion v7 (current production, promoted November 2026):** The production champion is trained on a data pool combining the dessert restaurant dataset (`dessert-ml.csv`, real `is_treated` labels — 1,702 treated / 707 control, 70.7% treatment rate) with the Dunnhumby Complete Journey dataset (real causal labels — 1,584 treated / 916 control households). This multi-dataset pooling strategy addresses a critical limitation of single-dataset training: the dessert-ml.csv dataset's high treatment rate (70.7%) produces a relatively small control group (707 customers), limiting causal signal. Dunnhumby's natural treatment/control split (63.4% treated) provides additional structural variation to improve CATE estimation.
+**Champion v11 (current production, November 2026):** The current production champion is v11, trained using PSM Mode A (discount column as treatment proxy) on synthetic DotDash data with CausalForestDML (R-Learner) rather than the LightGBM X-Learner used in v7. Champion v11 uses 5 features that are exactly aligned with `uplift_engine.py`'s serving feature set: `total_price, quantity, is_campaign_spike, rfm_decile_segment, frequency` — eliminating the feature mismatch that caused serving-time errors in earlier versions. `baseline_control_prob = 0.647`. Champion v7 remains in the archive for rollback.
+
+**Champion v7 (archived, promoted November 2026):** The v7 champion was trained on a data pool combining the dessert restaurant dataset (`dessert-ml.csv`, real `is_treated` labels — 1,702 treated / 707 control, 70.7% treatment rate) with the Dunnhumby Complete Journey dataset (real causal labels — 1,584 treated / 916 control households). This multi-dataset pooling strategy addresses a critical limitation of single-dataset training: the dessert-ml.csv dataset's high treatment rate (70.7%) produces a relatively small control group (707 customers), limiting causal signal. Dunnhumby's natural treatment/control split (63.4% treated) provides additional structural variation to improve CATE estimation.
 
 | Metric | v7 Value |
 |--------|----------|
@@ -706,6 +718,270 @@ The **5% holdout mechanism** withholds a random control cohort from all campaign
 Message templates are pre-rendered per action type and truncated to channel-specific character limits (SMS ≤160 characters; LINE ≤500; Email ≤2,000), incorporating offer descriptors, temporal urgency markers, and action-specific calls to action. Three output artefacts are generated: `campaign_schedule_YYYY-MM.csv` (customer-level send datetime, channel, message, expected profit), `ab_holdout_YYYY-MM.csv` (control cohort metadata), and `campaign_summary_YYYY-MM.json` (daily send cadence, wave distribution, projected profit aggregates). These artefacts feed directly into CRM and campaign execution platforms.
 
 **Post-campaign feedback loop:** A companion `holdout_evaluator.py` module closes the measurement loop by ingesting actual purchase outcomes after the campaign window closes. The operator provides `actual_outcomes_YYYY-MM.csv` (minimum columns: `customer_id`, `purchased`) exported from the POS system, and the evaluator joins it against the treatment and control groups to compute: (1) treatment vs. control conversion rates with 95% Wilson score confidence intervals; (2) absolute and relative incremental lift; (3) two-proportion z-test for statistical significance (with scipy fallback to normal approximation); (4) incremental revenue per customer vs. model-predicted profit per customer — a direct model accuracy diagnostic. The evaluator exports `outcomes_labeled_YYYY-MM.csv` containing `is_treated` and `post_promo_visit` columns derived from observed outcomes. This file is structurally compatible with Layer 4's real label mode: passing it as `promo_response_path` in the next pipeline cycle causes the uplift model to retrain on causally identified outcomes rather than proxy labels, completing the reinforcement loop from deployment → observation → retraining.
+
+---
+
+### 4.7 DotDash Loyalty Connector and Hybrid RFM Pipeline
+
+**Input:** DotDash REST API (bearer token) and/or MeriPOS transaction DataFrame
+**Output:** Standard RFM-ready DataFrame (`customer_id`, `transaction_date`, `amount`)
+
+Many Thai SME operators have adopted LINE OA-based loyalty programs through platforms such as DotDash, accumulating member F/M/R aggregates and LINE user IDs in a CRM that is entirely separate from their POS transaction history. The DotDash Connector bridges this data gravity gap.
+
+#### 4.7.1 API Client
+
+`DotDashClient` authenticates via Bearer token (`DOTDASH_API_TOKEN` environment variable), fetches all members through cursor-based pagination (up to 100 members per page), and normalises Thai-language field names to standard column names via a bidirectional mapping:
+
+| Thai field | Standard column | Semantic |
+|------------|-----------------|---------|
+| `จำนวนครั้ง` | `frequency` | Visit count |
+| `ยอดใช้จ่าย` | `monetary` | Cumulative spend |
+| `ใช้บริการครั้งล่าสุด` | `last_visit` | Most recent visit date |
+| `ชื่อเล่น` | `display_name` | Display name |
+
+Retry logic applies exponential backoff (1s, 2s, 4s) on HTTP 429 and timeout errors (3 retries maximum), consistent with the LINE OA client design.
+
+#### 4.7.2 LINE userId Extraction
+
+When the API response includes a `line_user_id` field — indicating the member enrolled via LINE OA — it is used directly as `customer_id`, the identifier required for LINE Multicast broadcast. When absent, a synthetic `dotdash_{internal_id}` identifier is assigned and a warning is logged, ensuring downstream pipeline compatibility without silent data loss. For the execution layer, only records where `customer_id` starts with `U` (LINE convention) can be targeted via LINE Multicast; phone-number-derived identifiers are routed to the Meta Ads pipeline instead.
+
+#### 4.7.3 Data Quality Reporting
+
+`get_quality_report(meripos_df, dotdash_df)` quantifies the overlap between MeriPOS transaction data and DotDash member records, returning six metrics: `total_transactions`, `linked_transactions`, `linked_rate`, `total_members`, `members_with_spend`, and a Thai-language operational `recommendation` calibrated to the observed linkage rate:
+
+| Linkage rate | Mode | Recommendation |
+|-------------|------|----------------|
+| ≥ 0.30 | `full` | ใช้ข้อมูลเต็มรูปแบบ — เชื่อม POS กับสมาชิกได้ครบ |
+| 0.05–0.30 | `partial` | เชื่อมบางส่วน + สังเคราะห์ที่เหลือจากสมาชิก DotDash |
+| < 0.05 | `anonymous` | ใช้ข้อมูลสมาชิก DotDash สร้าง RFM เบื้องต้น — สอนพนักงานสแกน QR สมาชิกทุกบิล |
+
+This report is returned from the `GET /v1/segmentation` endpoint and guides operators on whether to invest in improving POS–CRM linkage.
+
+#### 4.7.4 Hybrid RFM Construction
+
+`build_hybrid_rfm(meripos_df, dotdash_df, quality_mode)` produces a standard RFM-ready DataFrame regardless of data availability:
+
+| Mode | Input | Join mechanism | Customer ID source |
+|------|-------|---------------|-------------------|
+| `full` | MeriPOS + DotDash | Phone number join | DotDash LINE userId |
+| `partial` | MeriPOS + DotDash | Phone join where possible; synthetic synthesis for unjoined | Mixture of real and synthetic |
+| `anonymous` | DotDash only | None — synthesise from member F/M/R | DotDash LINE userId |
+
+The `anonymous` mode synthesises individual transaction rows from DotDash member aggregates: for a member with `frequency = F`, `monetary = M`, and `last_visit = D`, it generates F rows with `amount = M/F` and dates spread backwards at 30-day intervals from `last_visit`. This synthetic representation is structurally identical to real transaction history for RFM computation purposes — the downstream pipeline has no awareness of which mode was used.
+
+The output schema is identical across all three modes — columns: `customer_id`, `transaction_date`, `amount` — a deliberate design choice that enables the core pipeline to be fully agnostic to CRM data quality.
+
+---
+
+### 4.8 Store Intelligence Extension: 38-Dimensional Store Embedding
+
+**Input:** `StoreProfile` dataclass (output of `store_intelligence.get_store_profile()`)
+**Output:** 38-dimensional `float32` numpy array — deterministic, fixed-length
+
+`get_store_embedding(store_profile)` transforms a store's behavioral profile into a fixed-length vector encoding its operational fingerprint for use in model tier selection and store similarity computation.
+
+#### 4.8.1 Embedding Architecture
+
+| Dimensions | Feature group | Normalization |
+|-----------|---------------|---------------|
+| [0:24] | `peak_hour_pattern` — 24-dim hourly transaction fraction | Sums to 1.0; uniform (1/24) if no peak data |
+| [24:31] | `day_of_week_pattern` — 7-dim daily transaction fraction (Mon=0 … Sun=6) | Sums to 1.0; uniform (1/7) if no DOW data |
+| [31:36] | `top_category_mix` — revenue share of top-5 categories | Each in [0, 1]; zero-padded if < 5 categories |
+| [36] | `discount_depth` — mean discount fraction | Clipped to [0, 1] |
+| [37] | `promo_lift_proxy` — lift indicator from `StoreProfile` | Clipped to [−1, 1] |
+
+The embedding is fully **deterministic**: identical `StoreProfile` input always produces identical output. This property is required for reproducibility in model registry comparisons and for the drift detection pipeline to attribute changes to data rather than stochastic initialization.
+
+#### 4.8.2 Discriminability
+
+Two stores with structurally different peak patterns — a breakfast café (peaks 07:00–09:00) and a dinner restaurant (peaks 19:00–21:00) — produce embeddings with cosine similarity < 0.7, confirming the feature space captures meaningful business-behavioral distinctions. The 24-dim hourly component contributes the majority of discriminability: stores with identical DOW and category profiles but different hourly traffic patterns remain well-separated in embedding space.
+
+#### 4.8.3 Integration with Campaign Pipeline
+
+The `Layer4Context` dataclass was extended with an optional `store_embedding: np.ndarray | None` field. `campaign_planner.py` populates this field after building `StoreProfile` via a `try/except` guard that falls back to `None` if `StoreProfile` construction fails, preserving backward compatibility. The store embedding is currently passed downstream for use in hierarchical model tier selection (Section 4.9); future work will use pairwise cosine similarity for nearest-neighbor model transfer across stores.
+
+---
+
+### 4.9 Hierarchical Model Tier and Improved PSM Mode C
+
+#### 4.9.1 Hierarchical Model Tier
+
+`train_rlearner.py` accepts a `--model-tier global|category|store` flag controlling the scope of training data:
+
+| Flag | Training scope | Additional flags |
+|------|---------------|-----------------|
+| `--model-tier global` | All stores — full dataset | None |
+| `--model-tier category` | Business category filter | `--category food_and_beverage\|retail\|beauty\|services` |
+| `--model-tier store` | Single store | `--store-id <id>`, `--min-store-months <n>` (default 12) |
+
+**Data sufficiency check at the store tier:** If the filtered dataset covers fewer than `min_store_months` months (default 12), the training falls back to the category tier. If category data is also insufficient, it falls back to global. A warning is logged at each fallback level specifying the available months and the tier selected. The model manifest records `tier`, `category`, and `store_id` alongside standard Qini and version metadata, enabling the serving pipeline to match the most specific applicable model tier at inference time.
+
+**Champion v11** is trained at the global tier using CausalForestDML (R-Learner) under PSM Mode A on synthetic DotDash data, using 5 features that exactly match `uplift_engine.py`'s serving feature set: `total_price, quantity, is_campaign_spike, rfm_decile_segment, frequency`. Feature alignment between training and serving is enforced by sharing `SERVING_FEATURES` from a single constants module — eliminating the feature mismatch that caused silent serving errors in earlier versions.
+
+#### 4.9.2 PSM Mode C Improved — Campaign Date Filtering
+
+Propensity Score Matching Mode C (`proxy` mode) infers treatment assignment from purchase frequency spikes when no explicit campaign labels are available. The original implementation flagged all spikes above a standard deviation threshold, producing false positives when normal seasonal demand fluctuations coincided with the analysis window.
+
+**Improved implementation:** `_infer_treatment_mode_c(pos_df, campaign_dates=None, campaign_window_days=7)` now accepts an optional list of known campaign execution dates (read from `campaign_history.jsonl`). When `campaign_dates` is provided, only spikes occurring within ±`campaign_window_days` (default 7) of a campaign date are counted as treatment-proxy events. Spikes outside this temporal window are discarded as probable non-campaign demand variation.
+
+The improvement reduces false-positive treatment assignment in Mode C by removing spikes attributable to seasonal events (public holidays, promotions by other parties) that happen to coincide with the analysis window. The warning message adapts at runtime:
+
+- *With campaign history:* "Mode C: treating spikes within ±7d of N campaign dates as treatment proxy"
+- *Without campaign history:* "Mode C: spike-only proxy (no campaign dates provided — consider Mode A or B for more accurate labels)"
+
+This nudges operators toward higher-quality label sources when campaign history is available, while preserving the original behavior as a last resort.
+
+---
+
+### 4.10 Production REST API Layer
+
+The ML Campaign Engine exposes its full capability set through a FastAPI REST service (`src/crm_api/`), enabling integration with partner platforms without requiring direct Python execution or access to the underlying ML codebase.
+
+#### 4.10.1 Endpoint Inventory
+
+| Endpoint | Method | Responsibility |
+|----------|--------|---------------|
+| `/health` | GET | Service health check; list active endpoints |
+| `/v1/campaign/plan` | POST | Accept base64-encoded POS CSV → run full pipeline → return plan + store in JSONL |
+| `/v1/campaign/analyze` | POST | Evaluate operator campaigns via Promo Advisor (4 checks: profitability, overlap, segment_readiness, budget_efficiency) |
+| `/v1/campaign/history` | GET | Return paginated plan history from `campaign_history.jsonl` |
+| `/v1/campaign/record-outcome` | POST | Record actual revenue outcomes for model calibration |
+| `/v1/campaign/execute` | POST | Dispatch campaign via LINE OA or Meta Ads |
+| `/v1/audience/export` | POST | Export targeting audience for external platforms |
+| `/v1/content/generate` | POST | Generate AI-driven campaign copy via Claude API |
+| `/v1/model/retrain` | POST | Queue background retrain job |
+| `/v1/segment/health` | GET | Current segment health scores + trend vs. prior snapshot |
+| `/v1/plans/{month}` | GET | Monthly campaign plan details |
+| `/v1/plans/{month}/events` | GET | Wave schedule (batch_index, batch_total, wave_customer_total) |
+| `/v1/plans/{month}/calendar.ics` | GET | iCalendar export for campaign schedule |
+| `/v1/plans/{month}/segments` | GET | Segment breakdown for a plan |
+| `/v1/plans/{month}/promotions` | GET | Promotion details for a plan |
+| `/v1/plans/{month}/customers/{customer_id}` | GET | Per-customer plan details |
+| `/v1/plans/{month}/events/{event_id}/customers` | GET | Customer list for a specific wave event |
+| `/v1/segmentation` | GET | Current segmentation summary |
+| `/v1/segmentation/customers` | GET | Paginated customer segment list |
+| `/v1/segmentation/customers/{customer_id}` | GET | Per-customer segment and RFM details |
+| `/v1/months` | GET | List available campaign months |
+
+#### 4.10.2 Storage Layer
+
+`crm_api/store.py` implements append-only JSONL storage for three collections: `campaign_history.jsonl` (plans, with status lifecycle `active` → `awaiting_outcome` → `completed`), `outcomes.jsonl` (actual revenue results), and `segment_snapshots.jsonl` (segment health over time for trend computation). All writes use atomic file I/O. `get_plans()` returns records newest-first with `store_id` filtering and `limit`/`offset` pagination.
+
+#### 4.10.3 Thai OpenAPI Documentation Requirement
+
+Every endpoint carries Thai-language metadata in four required fields: `summary`, `description`, `tags[]`, and all `parameters[*].description`. This requirement is enforced by `tests/crm_api/test_openapi_docs_thai.py`, which:
+
+1. Fetches `/openapi.json` via TestClient
+2. Validates that the set of documented paths exactly equals `EXPECTED_ROUTES`
+3. Checks every operation for Thai Unicode (`[฀-๿]`) in `summary` and `description` (minimum 40 characters)
+4. Checks every parameter for Thai `description`
+5. Validates that every tag is in Thai and has a described Thai entry in `spec.tags[]`
+6. Validates Thai response descriptions for HTTP 200, 401, 404, 422, 503
+7. Validates that the app `info.description` explains what a *wave* (รอบ) is and how it spreads over days
+
+The test suite runs at CI time, preventing undocumented endpoints from reaching production.
+
+#### 4.10.4 Authentication
+
+All endpoints except `GET /health` require `X-API-Key` header authentication. Keys are configured via `Settings(api_key=...)` at application startup. Missing or invalid keys return HTTP 401. The API key is passed to all underlying pipeline calls to enable per-operator audit logging.
+
+---
+
+### 4.11 Execution Layer: LINE OA and Meta Ads Integration
+
+**Input:** Campaign plan (`plan_id`), channel selection (`line_oa` | `meta`), optional message text and ad budget
+**Output:** `{execution_id, status: "sent"|"partial"|"failed", delivery_summary}` + plan status updated in JSONL
+
+#### 4.11.1 LINE OA Multicast Client (`line_oa_client.py`)
+
+The LINE Messaging API Multicast endpoint has a hard limit of 500 `user_id` values per request. `multicast()` handles arbitrarily large audiences automatically:
+
+1. **Deduplication:** Removes duplicate and empty `user_id` values before batching
+2. **Batching:** Splits the unique list into sublists of ≤ 500 elements
+3. **Dispatch:** Calls `_send_batch()` sequentially per batch
+4. **Rate-limit handling:** HTTP 429 responses trigger exponential backoff (1s, 2s, 4s across 3 retries)
+5. **Result aggregation:** Returns `{sent: int, failed: int, failed_ids: list[str]}`
+
+`dry_run=True` skips HTTP calls and returns simulated success, enabling integration testing without a live LINE channel token. The function raises `ValueError` with a Thai-language message if `LINE_CHANNEL_ACCESS_TOKEN` is unset and `dry_run=False`.
+
+#### 4.11.2 Meta Ads Pipeline (`meta_ads_client.py`)
+
+The 6-step pipeline creates a full Meta (Facebook/Instagram) ad campaign from a customer phone list:
+
+| Step | Method | Description | Output |
+|------|--------|-------------|--------|
+| 1 | `upload_custom_audience(phone_list)` | Hash phones (SHA-256) → upload to Meta Custom Audience | `audience_id` |
+| 2 | `create_lookalike(audience_id, country="TH", ratio=0.01)` | 1% Thai lookalike | `lookalike_id` |
+| 3 | `create_campaign(name, objective, budget_thb)` | Create campaign (PAUSED status) | `campaign_id` |
+| 4 | `create_ad_set(campaign_id, audience_id, budget_thb)` | Set daily budget and targeting | `ad_set_id` |
+| 5 | `create_creative(image_url, headline, body, cta)` | Build link_data creative | `creative_id` |
+| 6 | `create_ad(ad_set_id, creative_id)` | Link set to creative | `ad_id` |
+
+**Phone hashing:** Phones are normalized to international format before SHA-256 hashing: `0812345678` → `+66812345678` → `sha256("+66812345678".encode()).hexdigest()`. This satisfies Meta's hashed PII requirement and Thai mobile number convention.
+
+**Currency conversion:** Budget values in THB are converted to USD cents at 36 THB/USD (`budget_usd_cents = int(budget_thb / 36 * 100)`) before the Meta API call. All ads start in `PAUSED` status, requiring explicit operator activation after creative review — preventing accidental campaign launch during testing.
+
+**Insights retrieval:** `get_ad_insights(ad_id)` returns `{impressions, clicks, ctr, conversions, spend_thb}`, converting the Meta API's USD spend field back to THB.
+
+**Retry logic:** All HTTP calls use 3-retry exponential backoff on HTTP 429, consistent with the LINE OA client. Non-429 HTTP errors raise `RuntimeError` after all retries are exhausted.
+
+#### 4.11.3 POST /v1/campaign/execute Endpoint
+
+The execute endpoint connects the ML campaign plan to external channel delivery in five steps:
+
+1. Validate `channel` ∈ `{"line_oa", "meta"}` — return 400 otherwise
+2. Retrieve plan from `campaign_history.jsonl` by `plan_id` — return 404 if absent
+3. Validate required credentials (LINE token or Meta env vars) — return 503 with Thai error if missing
+4. Extract audience (`line_user_ids` for LINE, phone numbers from POS for Meta) — return 422 if empty
+5. Dispatch via appropriate client, record `execution_id`, `executed_at`, `channel`, and `delivery_stats` in plan JSONL
+
+The plan status is updated to `awaiting_outcome` immediately after a successful execution, initiating the 30-day outcome capture window (Section 4.12).
+
+---
+
+### 4.12 Automated Outcome Capture and Retrain Scheduler
+
+**Input:** `campaign_history.jsonl` (plans in `awaiting_outcome` status), store POS files
+**Output:** Updated `outcomes.jsonl`, updated plan status, retrain trigger assessment
+
+`retrain_scheduler.py` implements the final link in the ML feedback loop — translating campaign execution results into calibration data for model retraining.
+
+#### 4.12.1 Job Logic
+
+The scheduler processes campaign plans through the following pipeline:
+
+```
+For each plan with status = "awaiting_outcome" within lookback window (default 90 days):
+    age_days = (now - executed_at).total_seconds() / 86400
+    if age_days < outcome_window_days (default 30):
+        skip (too recent — post-campaign window not complete)
+    else:
+        load store POS file → normalise columns
+        pre_revenue  = sum(amount) where transaction_date ∈ [exec_at − 30d, exec_at)
+        post_revenue = sum(amount) where transaction_date ∈ [exec_at, exec_at + 30d]
+        lift = post_revenue − pre_revenue
+        lift_pct = lift / pre_revenue × 100   (0 if pre_revenue = 0)
+        write outcome dict to outcomes.jsonl
+        mark plan status = "completed" in campaign_history.jsonl
+```
+
+After processing all eligible plans, if `len(outcomes.jsonl) ≥ min_outcomes_for_retrain` (default 3), `retrain_trigger.assess_retrain()` is called to check feature drift and model quality. The trigger's `needs_retrain` verdict and reasons are logged; actual model retraining is initiated through `POST /v1/model/retrain` or the `train_rlearner.py` CLI.
+
+#### 4.12.2 Timezone Alignment
+
+POS CSV files typically store dates as timezone-naive strings (`"2026-10-01"`). The scheduler aligns comparison boundaries to timezone-naive datetime objects when the POS column is tz-naive, avoiding the `Invalid comparison between dtype=datetime64[us] and datetime` error that occurs when pandas' `datetime64[us]` column is compared against Python `datetime` objects with timezone info. The alignment is detected automatically from the `dt.tz` attribute of the parsed column.
+
+#### 4.12.3 Configuration
+
+All scheduler parameters have defaults in `business_config.py` and can be overridden at runtime via CLI flags:
+
+| Parameter | Default | CLI flag |
+|-----------|---------|---------|
+| `outcome_window_days` | 30 | `--window` |
+| `min_outcomes_for_retrain` | 3 | `--min-outcomes` |
+| `lookback_days` | 90 | `--lookback` |
+
+The `--dry-run` flag simulates the full scheduling cycle without reading POS files or writing to any storage, returning a dict with `{processed, skipped, retrain_triggered, outcomes}` from simulated data. This enables integration testing in CI environments without requiring real POS fixture files.
 
 ---
 

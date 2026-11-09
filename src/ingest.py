@@ -22,6 +22,8 @@ except ImportError:
 
 _ingest_logger = logging.getLogger(__name__)
 
+import re as _re
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -444,3 +446,445 @@ class DataIngester:
             "conversion_rate":          conversion_rate,
             "date_range_days":          date_range_days,
         }
+
+
+# ---------------------------------------------------------------------------
+# MeriPOS / DotDash helpers  (Phase 1)
+# ---------------------------------------------------------------------------
+
+# MeriPOS Transaction Report column → standard name
+_MERIPOS_COLS: dict[str, str] = {
+    "Bill Opens":     "timestamp",
+    "Receipt number": "receipt_id",
+    "Net sales":      "net_sales",
+    "Gross sales":    "gross_sales",
+    "Discounts":      "discount_amount",
+    "Items":          "items_text",
+    "Customer":       "customer_raw",
+    "Payment type":   "payment_type",
+    "Sales Channels": "channel",
+    "Branch":         "branch",
+}
+
+# DotDash Customer Report column → standard name
+_DOTDASH_COLS: dict[str, str] = {
+    "กลุ่มลูกค้า (EN)":       "dotdash_segment",
+    "ระดับสมาชิก":            "tier",
+    "ชื่อเล่น":               "display_name",
+    "เบอร์โทรศัพท์":          "phone",
+    "จำนวนครั้งที่ใช้บริการ": "frequency",
+    "ยอดใช้จ่าย":             "monetary",
+    "ใช้บริการครั้งล่าสุด":    "last_visit",
+    "แต้มที่ใช้ได้":           "points",
+}
+
+# Sentinel values that mean "no data"
+_NULL_SENTINELS = {"-", "", "nan", "None", "NaN", "null"}
+
+# Pattern: "2x Latte" or "2 x Latte" or "2×Latte"
+_ITEM_QTY_RE = _re.compile(r"(\d+(?:\.\d+)?)\s*[xX×]\s*(.+?)(?=\s*,\s*\d+\s*[xX×]|$)")
+
+
+def detect_source(df: pd.DataFrame) -> str:
+    """Return the data source format: 'meripos', 'dotdash', or 'standard'."""
+    cols = set(df.columns)
+    if "Bill Opens" in cols or "Receipt number" in cols:
+        return "meripos"
+    if "จำนวนครั้งที่ใช้บริการ" in cols or "กลุ่มลูกค้า (EN)" in cols:
+        return "dotdash"
+    return "standard"
+
+
+def quality_gate(df: pd.DataFrame) -> dict:
+    """Assess customer-linkage rate and return mode + linked_rate.
+
+    Returns
+    -------
+    dict with keys: source, mode ('full'|'partial'|'anonymous'), linked_rate, total_rows
+    """
+    from business_config import CONFIG
+    full_thresh    = CONFIG.get("quality_gate_full_threshold",    0.30)
+    partial_thresh = CONFIG.get("quality_gate_partial_threshold", 0.05)
+
+    source = detect_source(df)
+
+    if source == "meripos":
+        col = "Customer"
+    elif source == "dotdash":
+        col = "เบอร์โทรศัพท์"
+    else:
+        col = "customer_id"
+
+    if col not in df.columns or df.empty:
+        linked_rate = 0.0
+    else:
+        linked = df[col].notna() & ~df[col].astype(str).str.strip().isin(_NULL_SENTINELS)
+        linked_rate = float(linked.mean())
+
+    if linked_rate >= full_thresh:
+        mode = "full"
+    elif linked_rate >= partial_thresh:
+        mode = "partial"
+    else:
+        mode = "anonymous"
+
+    return {
+        "source":      source,
+        "mode":        mode,
+        "linked_rate": round(linked_rate, 4),
+        "total_rows":  len(df),
+    }
+
+
+def filter_test_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove test/demo rows: net_sales < 10 baht and campaign names containing 'test_'.
+
+    Logs the number of rows removed.
+    """
+    from business_config import CONFIG
+    min_amount = CONFIG.get("test_data_min_amount", 10)
+
+    original_len = len(df)
+
+    # Drop tiny-amount rows (1-baht test bills)
+    for col in ("Net sales", "net_sales", "total_price", "amount"):
+        if col in df.columns:
+            amt = pd.to_numeric(df[col], errors="coerce")
+            df = df[~((amt < min_amount) & amt.notna())].copy()
+            break
+
+    # Drop rows whose string columns match "test_..." campaign pattern
+    for col in df.select_dtypes(include="object").columns:
+        series = df[col].astype(str)
+        # skip columns that are mostly test-pattern — those are not campaign name cols
+        if series.str.contains(r"(?i)\btest[_\s]", na=False, regex=True).mean() > 0.5:
+            continue
+        mask = series.str.contains(r"(?i)\btest[_\s]", na=False, regex=True)
+        if mask.any():
+            df = df[~mask].copy()
+
+    n_removed = original_len - len(df)
+    if n_removed:
+        _ingest_logger.info("filter_test_data: removed %d test/demo rows", n_removed)
+
+    return df.reset_index(drop=True)
+
+
+def parse_meripos_items(df: pd.DataFrame) -> pd.DataFrame:
+    """Parse MeriPOS 'Items' column into item-level rows.
+
+    Input  : DataFrame with an 'Items' column (or 'items_text' after rename).
+    Output : DataFrame — columns: receipt_id, timestamp, item_name, qty
+    """
+    _EMPTY = pd.DataFrame(columns=["receipt_id", "timestamp", "item_name", "qty"])
+
+    items_col = "items_text" if "items_text" in df.columns else ("Items" if "Items" in df.columns else None)
+    if items_col is None or df.empty:
+        return _EMPTY
+
+    receipt_col   = next((c for c in ("receipt_id", "Receipt number") if c in df.columns), None)
+    timestamp_col = next((c for c in ("timestamp", "Bill Opens") if c in df.columns), None)
+
+    rows: list[dict] = []
+    for _, row in df.iterrows():
+        receipt_id = row[receipt_col]   if receipt_col   else None
+        timestamp  = row[timestamp_col] if timestamp_col else None
+        items_text = str(row[items_col]) if pd.notna(row[items_col]) else ""
+
+        matches = _ITEM_QTY_RE.findall(items_text)
+        if matches:
+            for qty_str, item_name in matches:
+                rows.append({
+                    "receipt_id": receipt_id,
+                    "timestamp":  timestamp,
+                    "item_name":  item_name.strip(),
+                    "qty":        float(qty_str),
+                })
+        else:
+            # Fallback: comma-separated, treat each as qty=1
+            for part in items_text.split(","):
+                part = part.strip()
+                if part and part.lower() not in _NULL_SENTINELS:
+                    rows.append({
+                        "receipt_id": receipt_id,
+                        "timestamp":  timestamp,
+                        "item_name":  part,
+                        "qty":        1.0,
+                    })
+
+    if not rows:
+        return _EMPTY
+
+    item_df = pd.DataFrame(rows)
+    item_df["timestamp"] = pd.to_datetime(item_df["timestamp"], errors="coerce")
+    return item_df
+
+
+def ingest_meripos(path: str, filter_test: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load and normalise a MeriPOS Transaction Report CSV.
+
+    Returns
+    -------
+    tx_df   : normalised transaction-level DataFrame (standard columns)
+    item_df : item-level DataFrame from parsed Items column
+    """
+    raw = pd.read_csv(path, encoding="utf-8", encoding_errors="replace", low_memory=False)
+
+    if filter_test:
+        raw = filter_test_data(raw)
+
+    rename = {k: v for k, v in _MERIPOS_COLS.items() if k in raw.columns}
+    df = raw.rename(columns=rename)
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    for col in ("net_sales", "gross_sales", "discount_amount"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Derive customer_id from phone/member field where available
+    if "customer_raw" in df.columns:
+        linked = df["customer_raw"].notna() & ~df["customer_raw"].astype(str).str.strip().isin(_NULL_SENTINELS)
+        df["customer_id"] = df["customer_raw"].where(linked, other=None)
+
+    # Pipeline-compatibility alias
+    if "net_sales" in df.columns and "total_price" not in df.columns:
+        df["total_price"] = df["net_sales"]
+
+    item_df = parse_meripos_items(df)
+    return df, item_df
+
+
+def ingest_dotdash(path: str) -> pd.DataFrame:
+    """Load and normalise a DotDash Customer Report CSV.
+
+    Returns a DataFrame ready for Hybrid RFM:
+    customer_id, display_name, phone, frequency, monetary, recency,
+    last_visit, tier, dotdash_segment, points
+    """
+    raw = pd.read_csv(path, encoding="utf-8", encoding_errors="replace", low_memory=False)
+
+    rename = {k: v for k, v in _DOTDASH_COLS.items() if k in raw.columns}
+    df = raw.rename(columns=rename)
+
+    for col in ("frequency", "monetary"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    if "last_visit" in df.columns:
+        df["last_visit"] = pd.to_datetime(df["last_visit"], format="%d/%m/%Y", errors="coerce")
+        today = pd.Timestamp.now().normalize()
+        df["recency"] = (today - df["last_visit"]).dt.days
+
+    if "phone" in df.columns:
+        df["phone"] = (
+            df["phone"].astype(str)
+            .str.replace(r"[-\s]", "", regex=True)
+            .where(lambda s: ~s.isin(_NULL_SENTINELS), other=None)
+        )
+
+    # Placeholder customer_id — replaced by LINE userId once API is available
+    df["customer_id"] = "dotdash_" + df.index.astype(str)
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# AC-3.3 — Hybrid RFM Builder
+# ---------------------------------------------------------------------------
+
+def build_hybrid_rfm(
+    meripos_df: pd.DataFrame,
+    dotdash_df: pd.DataFrame,
+    quality_mode: str = "anonymous",
+) -> pd.DataFrame:
+    """Combine MeriPOS transaction data and DotDash member data into a unified RFM DataFrame.
+
+    The output format matches what ``campaign_pipeline.load_and_preprocess_csv`` returns:
+    ``customer_id``, ``transaction_date``, ``amount`` — so the downstream ML pipeline
+    sees a standard input regardless of which mode was used.
+
+    Parameters
+    ----------
+    meripos_df : pd.DataFrame
+        Normalised MeriPOS transaction DataFrame (from ingest_meripos).
+        Required columns: timestamp (or Bill Opens), net_sales, customer_raw (or phone).
+    dotdash_df : pd.DataFrame
+        Normalised DotDash member DataFrame (from ingest_dotdash or DotDashClient).
+        Required columns: customer_id, frequency, monetary, recency, last_visit.
+    quality_mode : str
+        'full'      — join via phone (linked_rate ≥ 0.30); RFM from actual transactions
+        'partial'   — join where possible; synthesise records for unjoined DotDash members
+        'anonymous' — no join; synthesise all records from DotDash member data only
+
+    Returns
+    -------
+    pd.DataFrame with columns: customer_id, transaction_date, amount
+        Pipeline-ready; no null customer_id or transaction_date rows.
+    """
+    if quality_mode == "full":
+        return _hybrid_full(meripos_df, dotdash_df)
+    if quality_mode == "partial":
+        return _hybrid_partial(meripos_df, dotdash_df)
+    # anonymous (default)
+    return _hybrid_anonymous(dotdash_df)
+
+
+def _hybrid_full(meripos_df: pd.DataFrame, dotdash_df: pd.DataFrame) -> pd.DataFrame:
+    """Full mode: join MeriPOS transactions to DotDash members via phone.
+
+    Matched customers get customer_id = LINE userId (or dotdash_id).
+    Unmatched transactions keep 'anon_{receipt_id}' as customer_id.
+    """
+    tx = _meripos_to_std(meripos_df)
+    if dotdash_df.empty:
+        return tx
+
+    phone_map = _build_phone_map(dotdash_df)
+    if not phone_map:
+        return tx
+
+    # Map phone in tx → customer_id from DotDash
+    if "phone" in tx.columns:
+        mapped = tx["phone"].map(phone_map)
+        mask   = mapped.notna()
+        tx.loc[mask, "customer_id"] = mapped[mask]
+        _ingest_logger.info(
+            "build_hybrid_rfm[full]: linked %d/%d transactions via phone",
+            int(mask.sum()), len(tx),
+        )
+
+    return tx[["customer_id", "transaction_date", "amount"]].dropna(
+        subset=["customer_id", "transaction_date"]
+    )
+
+
+def _hybrid_partial(meripos_df: pd.DataFrame, dotdash_df: pd.DataFrame) -> pd.DataFrame:
+    """Partial mode: join where possible, synthesise DotDash records for the rest."""
+    joined = _hybrid_full(meripos_df, dotdash_df)
+
+    # Find DotDash members not represented in joined data
+    joined_cids = set(joined["customer_id"].unique())
+    unjoined    = dotdash_df[~dotdash_df["customer_id"].isin(joined_cids)]
+
+    if unjoined.empty:
+        return joined
+
+    synthetic = _synthesise_transactions(unjoined)
+    result    = pd.concat([joined, synthetic], ignore_index=True)
+
+    _ingest_logger.info(
+        "build_hybrid_rfm[partial]: %d joined transactions + %d synthetic from %d unjoined members",
+        len(joined), len(synthetic), len(unjoined),
+    )
+    return result
+
+
+def _hybrid_anonymous(dotdash_df: pd.DataFrame) -> pd.DataFrame:
+    """Anonymous mode: synthesise transaction records directly from DotDash member data."""
+    if dotdash_df.empty:
+        return pd.DataFrame(columns=["customer_id", "transaction_date", "amount"])
+
+    result = _synthesise_transactions(dotdash_df)
+    _ingest_logger.info(
+        "build_hybrid_rfm[anonymous]: synthesised %d transactions from %d DotDash members",
+        len(result), len(dotdash_df),
+    )
+    return result
+
+
+# ------------------------------------------------------------------
+# Private helpers for Hybrid RFM
+# ------------------------------------------------------------------
+
+def _meripos_to_std(meripos_df: pd.DataFrame) -> pd.DataFrame:
+    """Extract standard columns from normalised MeriPOS DataFrame."""
+    df = meripos_df.copy()
+
+    # Map timestamp column
+    if "timestamp" in df.columns:
+        df["transaction_date"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    elif "Bill Opens" in df.columns:
+        df["transaction_date"] = pd.to_datetime(df["Bill Opens"], errors="coerce")
+    else:
+        df["transaction_date"] = pd.NaT
+
+    # Amount: prefer net_sales
+    if "net_sales" in df.columns:
+        df["amount"] = pd.to_numeric(df["net_sales"], errors="coerce").fillna(0.0)
+    elif "amount" in df.columns:
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    else:
+        df["amount"] = 0.0
+
+    # customer_id: phone-linked rows use phone, anonymous use receipt_id proxy
+    if "customer_id" not in df.columns:
+        if "phone" in df.columns:
+            null_s = {"-", "", "nan", "None", "NaN", "null"}
+            has_phone = df["phone"].notna() & ~df["phone"].astype(str).str.strip().isin(null_s)
+            rid_col   = "receipt_id" if "receipt_id" in df.columns else None
+            rid       = df[rid_col].astype(str) if rid_col else df.index.astype(str)
+            df["customer_id"] = df["phone"].where(has_phone, other="anon_" + rid)
+        else:
+            df["customer_id"] = "anon_" + df.index.astype(str)
+
+    # Keep phone for joining if available
+    keep = ["customer_id", "transaction_date", "amount"]
+    if "phone" in df.columns:
+        keep.append("phone")
+    return df[keep]
+
+
+def _build_phone_map(dotdash_df: pd.DataFrame) -> dict[str, str]:
+    """Return {normalised_phone: customer_id} from DotDash member data."""
+    if "phone" not in dotdash_df.columns:
+        return {}
+    null_s = {"-", "", "nan", "None", "NaN", "null", "none"}
+    valid  = dotdash_df[
+        dotdash_df["phone"].notna()
+        & ~dotdash_df["phone"].astype(str).str.strip().isin(null_s)
+    ]
+    return dict(zip(valid["phone"].astype(str), valid["customer_id"].astype(str)))
+
+
+def _synthesise_transactions(members_df: pd.DataFrame) -> pd.DataFrame:
+    """Create synthetic transaction records from DotDash member F/M/R values.
+
+    For each member with frequency N and monetary M:
+    - Creates N transaction rows, each with amount = M / N
+    - Last transaction date = last_visit (or today if missing)
+    - Earlier transactions spread backwards at equal intervals (default 30-day gap)
+
+    This ensures the pipeline's group-by aggregation reproduces correct F/M/R.
+    """
+    rows: list[dict] = []
+    today = pd.Timestamp.now().normalize()
+
+    for _, member in members_df.iterrows():
+        cid       = str(member["customer_id"])
+        freq      = max(1, int(member.get("frequency") or 1))
+        monetary  = float(member.get("monetary") or 0.0)
+        last_v    = member.get("last_visit")
+
+        last_date = pd.to_datetime(last_v, errors="coerce") if last_v is not None else pd.NaT
+        if pd.isna(last_date):
+            last_date = today
+
+        per_tx = monetary / freq if freq > 0 else 0.0
+
+        for i in range(freq):
+            # i=0 → last_visit; i=1 → 30 days earlier; etc.
+            tx_date = last_date - pd.Timedelta(days=30 * i)
+            rows.append({
+                "customer_id":      cid,
+                "transaction_date": tx_date,
+                "amount":           max(0.0, per_tx),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["customer_id", "transaction_date", "amount"])
+
+    df = pd.DataFrame(rows)
+    df = df[df["amount"] > 0]
+    return df.reset_index(drop=True)

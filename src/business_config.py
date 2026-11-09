@@ -11,9 +11,21 @@ CONFIG = {
     "currency":         "$",
 
     # === Financial ===
-    "cogs_rate":                  0.50,   # Cost of Goods Sold as % of revenue
-    "min_allowable_net_margin":   0.15,   # CFO floor: reject campaigns below this margin
+    "cogs_rate":                  0.50,   # Cost of Goods Sold as % of revenue (global fallback)
+    "min_allowable_net_margin":   0.15,   # CFO floor: reject campaigns below this margin (global fallback)
     "control_group_rate":         0.05,   # A/B holdout split
+
+    # === Per-category margin config ===
+    # ร้านที่มีสินค้าหลายประเภทใส่ margin แยกได้ที่นี่
+    # format: { "category_name": { "cogs_rate": float, "min_margin": float } }
+    # pipeline จะ lookup จาก category ก่อน ถ้าไม่เจอใช้ global fallback ข้างบน
+    # product_type ที่รองรับ: "mass" | "premium" | "rental" | หรือใส่ชื่อ category เอง
+    "category_margins": {
+        # ตัวอย่าง — ร้านแก้ไขได้ตามจริง
+        # "mass":    { "cogs_rate": 0.60, "min_margin": 0.10 },
+        # "premium": { "cogs_rate": 0.40, "min_margin": 0.20 },
+        # "rental":  { "cogs_rate": 0.20, "min_margin": 0.30 },
+    },
 
     # === Promo cost rates (as % of AOV per action type) ===
     # Off-peak rates are higher — justified because store is quiet and needs traffic.
@@ -118,4 +130,16 @@ CONFIG = {
         "mid":         "bundle",
     },
     "hibernating_recency_days": 90,    # recency > this → hibernating/lost_cause threshold
+
+    # === Data quality gate (Phase 1) ===
+    "quality_gate_full_threshold":    0.30,  # linked_rate ≥ this → "full" RFM mode
+    "quality_gate_partial_threshold": 0.05,  # linked_rate ≥ this → "partial" mode
+    "test_data_min_amount":           10,    # bills below this baht → treated as test data
+
+    # === Stock forecast alerts (Phase 1) ===
+    "stock_spike_threshold":  0.30,   # forecast > history × (1+this) → spike alert
+    "stock_slow_threshold":   0.50,   # forecast < history × (1-this) for N weeks → slow mover
+    "stock_slow_weeks":       3,      # consecutive weeks of decline to trigger slow-mover alert
+    "stock_forecast_weeks":   4,      # default number of weeks to forecast ahead
+    "stock_min_history_days": 14,     # minimum days of item history required to forecast
 }

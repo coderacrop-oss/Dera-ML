@@ -1,121 +1,121 @@
 customer_id,recommended_action,expected_profit,should_send
-c000,Do Nothing (Do Not Disturb),3.7,0
-c001,Do Nothing (Do Not Disturb),3.75,0
-c002,Do Nothing (Do Not Disturb),4.71,0
+c000,Loyalty Nurture: แต้มสะสม,-1.44,1
+c001,VIP Reward: แจกแต้ม X2,-1.47,1
+c002,Loyalty Nurture: แต้มสะสม,-1.96,1
 c003,Loyalty Nurture: แต้มสะสม,0.37,1
-c004,Do Nothing (Do Not Disturb),4.05,0
+c004,Loyalty Nurture: แต้มสะสม,-1.3,1
 c005,Do Nothing (Low Basket Size),2.68,0
 c006,Do Nothing (Low Basket Size),2.35,0
 c007,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.77,1
-c008,Do Nothing (Do Not Disturb),4.2,0
+c008,VIP Reward: แจกแต้ม X2,-1.97,1
 c009,Loyalty Nurture: แต้มสะสม,-0.07,1
 c010,Do Nothing (Low Basket Size),2.7,0
 c011,Do Nothing (Do Not Disturb),4.9,0
-c012,Do Nothing (Do Not Disturb),2.95,0
+c012,Loyalty Nurture: แต้มสะสม,-0.56,1
 c013,Do Nothing (Do Not Disturb),5.56,0
 c014,Do Nothing (Do Not Disturb),3.42,0
 c015,Do Nothing (Do Not Disturb),4.61,0
 c016,Do Nothing (Low Basket Size),3.32,0
 c017,Do Nothing (Do Not Disturb),4.32,0
-c018,Do Nothing (Do Not Disturb),6.7,0
+c018,Loyalty Nurture: แต้มสะสม,-2.89,1
 c019,Do Nothing (Do Not Disturb),4.7,0
-c020,Do Nothing (Do Not Disturb),3.58,0
-c021,Do Nothing (Do Not Disturb),5.67,0
-c022,Do Nothing (Do Not Disturb),4.06,0
-c023,Do Nothing (Do Not Disturb),3.73,0
+c020,Loyalty Nurture: แต้มสะสม,-1.5,1
+c021,Loyalty Nurture: แต้มสะสม,-2.87,1
+c022,Loyalty Nurture: แต้มสะสม,-1.87,1
+c023,Loyalty Nurture: แต้มสะสม,-1.16,1
 c024,Loyalty Nurture: แต้มสะสม,0.95,1
 c025,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-2.72,1
-c026,Do Nothing (Do Not Disturb),4.09,0
+c026,Loyalty Nurture: แต้มสะสม,-2.57,1
 c027,Do Nothing (Do Not Disturb),3.58,0
-c028,Do Nothing (Do Not Disturb),4.36,0
+c028,Loyalty Nurture: แต้มสะสม,-1.84,1
 c029,Do Nothing (Do Not Disturb),4.15,0
 c030,Do Nothing (Do Not Disturb),7.38,0
 c031,Do Nothing (Do Not Disturb),5.57,0
 c032,Do Nothing (Do Not Disturb),5.12,0
 c033,Do Nothing (Do Not Disturb),4.75,0
-c034,Do Nothing (Do Not Disturb),3.5,0
+c034,Loyalty Nurture: แต้มสะสม,-1.35,1
 c035,Do Nothing (Do Not Disturb),6.28,0
 c036,Do Nothing (Do Not Disturb),4.68,0
-c037,Do Nothing (Do Not Disturb),4.53,0
+c037,Loyalty Nurture: แต้มสะสม,-1.96,1
 c038,Do Nothing (Do Not Disturb),6.08,0
-c039,Do Nothing (Do Not Disturb),6.06,0
+c039,Loyalty Nurture: แต้มสะสม,-1.79,1
 c040,Do Nothing (Low Basket Size),3.08,0
-c041,Do Nothing (Do Not Disturb),4.74,0
+c041,Loyalty Nurture: แต้มสะสม,-1.98,1
 c042,Loyalty Nurture: แต้มสะสม,0.16,1
-c043,Do Nothing (Do Not Disturb),6.64,0
+c043,Loyalty Nurture: แต้มสะสม,-2.02,1
 c044,Do Nothing (Low Basket Size),2.34,0
-c045,Do Nothing (Do Not Disturb),3.55,0
-c046,Do Nothing (Do Not Disturb),4.31,0
+c045,Loyalty Nurture: แต้มสะสม,-1.38,1
+c046,Loyalty Nurture: แต้มสะสม,-2.25,1
 c047,Do Nothing (Do Not Disturb),5.41,0
 c048,Do Nothing (Do Not Disturb),6.45,0
 c049,Do Nothing (Do Not Disturb),5.74,0
 c050,Do Nothing (Do Not Disturb),4.49,0
 c051,Loyalty Nurture: แต้มสะสม,0.28,1
-c052,Do Nothing (Do Not Disturb),3.6,0
+c052,Loyalty Nurture: แต้มสะสม,-1.14,1
 c053,Do Nothing (Do Not Disturb),6.67,0
-c054,Do Nothing (Do Not Disturb),4.32,0
+c054,Loyalty Nurture: แต้มสะสม,-1.87,1
 c055,Do Nothing (Low Basket Size),2.75,0
 c056,Do Nothing (Low Basket Size),2.2,0
 c057,Do Nothing (Low Basket Size),2.62,0
 c058,Do Nothing (Low Basket Size),2.58,0
-c059,Do Nothing (Do Not Disturb),3.44,0
+c059,Loyalty Nurture: แต้มสะสม,-1.3,1
 c060,Do Nothing (Do Not Disturb),4.68,0
 c061,Do Nothing (Do Not Disturb),5.31,0
-c062,Do Nothing (Do Not Disturb),3.52,0
-c063,Do Nothing (Do Not Disturb),5.67,0
-c064,Do Nothing (Do Not Disturb),6.55,0
+c062,Loyalty Nurture: แต้มสะสม,-1.47,1
+c063,Loyalty Nurture: แต้มสะสม,-2.87,1
+c064,Loyalty Nurture: แต้มสะสม,-2.83,1
 c065,Loyalty Nurture: แต้มสะสม,-0.07,1
 c066,Do Nothing (Do Not Disturb),3.68,0
 c067,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.59,1
 c068,Loyalty Nurture: แต้มสะสม,0.37,1
-c069,Do Nothing (Do Not Disturb),4.41,0
-c070,Do Nothing (Do Not Disturb),5.95,0
+c069,Loyalty Nurture: แต้มสะสม,-2.86,1
+c070,VIP Early Access,-3.51,1
 c071,Do Nothing (Do Not Disturb),4.52,0
-c072,Do Nothing (Do Not Disturb),5.85,0
+c072,Loyalty Nurture: แต้มสะสม,-3.14,1
 c073,Do Nothing (Low Basket Size),3.19,0
-c074,Do Nothing (Do Not Disturb),6.22,0
+c074,Loyalty Nurture: แต้มสะสม,-1.84,1
 c075,Do Nothing (Do Not Disturb),7.01,0
 c076,Do Nothing (Do Not Disturb),4.85,0
-c077,Do Nothing (Do Not Disturb),4.25,0
+c077,VIP Reward: แจกแต้ม X2,-2.08,1
 c078,Loyalty Nurture: แต้มสะสม,0.16,1
 c079,Do Nothing (Do Not Disturb),4.56,0
 c080,Do Nothing (Do Not Disturb),4.15,0
-c081,Do Nothing (Do Not Disturb),3.59,0
-c082,Do Nothing (Do Not Disturb),4.15,0
-c083,Do Nothing (Do Not Disturb),5.77,0
-c084,Do Nothing (Do Not Disturb),3.97,0
-c085,Do Nothing (Do Not Disturb),4.98,0
-c086,Do Nothing (Do Not Disturb),5.36,0
+c081,Loyalty Nurture: แต้มสะสม,-2.19,1
+c082,Loyalty Nurture: แต้มสะสม,-2.16,1
+c083,Loyalty Nurture: แต้มสะสม,-2.07,1
+c084,Loyalty Nurture: แต้มสะสม,-1.82,1
+c085,Loyalty Nurture: แต้มสะสม,-2.26,1
+c086,Loyalty Nurture: แต้มสะสม,-3.85,1
 c087,Do Nothing (Do Not Disturb),5.69,0
 c088,Loyalty Nurture: แต้มสะสม,-0.07,1
-c089,Do Nothing (Do Not Disturb),5.21,0
-c090,Do Nothing (Do Not Disturb),4.22,0
+c089,Loyalty Nurture: แต้มสะสม,-2.95,1
+c090,Loyalty Nurture: แต้มสะสม,-1.7,1
 c091,Do Nothing (Do Not Disturb),5.34,0
 c092,Do Nothing (Do Not Disturb),5.15,0
 c093,Do Nothing (Low Basket Size),2.96,0
 c094,Do Nothing (Do Not Disturb),4.51,0
-c095,Do Nothing (Do Not Disturb),7.01,0
+c095,VIP Early Access,-3.84,1
 c096,Do Nothing (Do Not Disturb),5.04,0
-c097,Do Nothing (Do Not Disturb),4.11,0
-c098,Do Nothing (Do Not Disturb),4.56,0
+c097,Loyalty Nurture: แต้มสะสม,-2.66,1
+c098,Loyalty Nurture: แต้มสะสม,-1.98,1
 c099,Loyalty Nurture: แต้มสะสม,-0.07,1
 c100,Loyalty Nurture: แต้มสะสม,-0.07,1
 c101,Do Nothing (Do Not Disturb),6.05,0
 c102,Do Nothing (Do Not Disturb),7.63,0
-c103,Do Nothing (Do Not Disturb),4.76,0
-c104,Do Nothing (Do Not Disturb),3.26,0
-c105,Do Nothing (Do Not Disturb),4.27,0
-c106,Do Nothing (Do Not Disturb),4.11,0
+c103,Loyalty Nurture: แต้มสะสม,-3.21,1
+c104,Loyalty Nurture: แต้มสะสม,-1.28,1
+c105,Loyalty Nurture: แต้มสะสม,-2.23,1
+c106,Loyalty Nurture: แต้มสะสม,-2.66,1
 c107,Loyalty Nurture: แต้มสะสม,0.17,1
-c108,Do Nothing (Do Not Disturb),5.01,0
-c109,Do Nothing (Do Not Disturb),5.91,0
+c108,Loyalty Nurture: แต้มสะสม,-3.38,1
+c109,VIP Reward: แจกแต้ม X2,-2.75,1
 c110,Do Nothing (Do Not Disturb),7.95,0
-c111,Do Nothing (Do Not Disturb),4.76,0
-c112,Do Nothing (Do Not Disturb),5.39,0
-c113,Do Nothing (Do Not Disturb),4.56,0
-c114,Do Nothing (Do Not Disturb),3.63,0
+c111,Loyalty Nurture: แต้มสะสม,-3.21,1
+c112,Loyalty Nurture: แต้มสะสม,-2.05,1
+c113,Loyalty Nurture: แต้มสะสม,-1.98,1
+c114,Loyalty Nurture: แต้มสะสม,-1.12,1
 c115,Do Nothing (Do Not Disturb),5.37,0
-c116,Do Nothing (Do Not Disturb),5.12,0
+c116,Loyalty Nurture: แต้มสะสม,-1.96,1
 c117,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.26,1
-c118,Do Nothing (Do Not Disturb),5.62,0
+c118,Loyalty Nurture: แต้มสะสม,-2.84,1
 c119,Do Nothing (Do Not Disturb),4.8,0

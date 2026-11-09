@@ -6,7 +6,8 @@ from . import docs
 from .auth import require_key
 from .errors import install_handlers
 from .loaders import list_months
-from . import catalog, ics, models, plans, runs, segmentation
+from . import catalog, ics, models, plans, runs, segmentation, campaign
+from . import health as health_router
 from .settings import Settings
 
 
@@ -33,7 +34,10 @@ def create_app(settings: Settings | None = None, *, run_engine: runs.Engine | No
     for r in (plans.router, catalog.router, segmentation.router, runs.router):
         app.include_router(r, prefix="/v1", dependencies=[Depends(require_key)], responses=ERRORS)
     app.include_router(ics.router, prefix="/v1", responses=ERRORS)  # own auth: key OR calendar token
-    app.include_router(models.router, prefix="/v1")  # operator tool: own auth (per-candidate token), hidden from the contract
+    app.include_router(models.router, prefix="/v1")  # operator tool: own auth
+    # Phase 2: new ML endpoints (campaign planning, health, content)
+    app.include_router(campaign.router,     prefix="/v1", responses=ERRORS)
+    app.include_router(health_router.router, prefix="/v1", responses=ERRORS)
     return app
 
 

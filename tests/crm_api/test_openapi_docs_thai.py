@@ -10,6 +10,16 @@ EXPECTED_ROUTES = {
     ("get", "/v1/plans/{month}/events/{event_id}/customers"),
     ("get", "/v1/segmentation"), ("get", "/v1/segmentation/customers"), ("get", "/v1/segmentation/customers/{customer_id}"),
     ("post", "/v1/runs"), ("get", "/v1/runs/{run_id}"), ("get", "/v1/runs/latest/layers"),
+    # Phase 2 — ML Campaign endpoints
+    ("post", "/v1/campaign/plan"), ("post", "/v1/campaign/analyze"),
+    ("get", "/v1/campaign/history"), ("post", "/v1/campaign/record-outcome"),
+    ("post", "/v1/audience/export"), ("post", "/v1/content/generate"),
+    ("post", "/v1/model/retrain"),
+    ("post", "/v1/model/retrain-request"),
+    ("get", "/v1/segment/health"),
+    ("get", "/v1/send-date/recommend"),
+    # Phase 5 — Execution
+    ("post", "/v1/campaign/execute"),
 }
 
 

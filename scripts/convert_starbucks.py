@@ -123,7 +123,11 @@ def load_starbucks(input_dir: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
         if not os.path.exists(path):
             sys.exit(f"❌ File not found: {path}\n"
                      f"   Download from Kaggle: 'Starbucks Capstone Challenge'")
-        return pd.read_json(path, orient="records", lines=False)
+        # Try line-delimited JSON first (most Kaggle uploads), fall back to array
+        try:
+            return pd.read_json(path, lines=True)
+        except Exception:
+            return pd.read_json(path, orient="records")
 
     portfolio = _read("portfolio.json")
     profile   = _read("profile.json")
@@ -175,61 +179,90 @@ def build_labels(events: pd.DataFrame) -> pd.DataFrame:
     """
     Per-customer A/B labels.
 
-    Treatment definition:
-      is_treated = 1  →  received at least one discount or BOGO offer
-                         (informational excluded: no purchase incentive)
+    Treatment strategy — "informational as proxy control":
+      In the Starbucks dataset almost every customer receives at least one
+      discount/BOGO offer, leaving fewer than 1% as true control.  Training an
+      uplift model on 99% treated vs 1% control is unreliable.
+
+      Instead we distinguish:
+        TREATED  (is_treated=1) — received ONLY incentive offers (discount/BOGO),
+                                  no informational offer.  Purchase = causal response
+                                  to financial incentive.
+        CONTROL  (is_treated=0) — received at least one informational offer
+                                  (no financial incentive).  Informational-only
+                                  customers serve as a natural holdout: they were
+                                  "nudged" without purchase incentive, so any
+                                  purchase is baseline behaviour.
+
+      Customers who received BOTH informational AND incentive offers are excluded
+      to avoid contamination.
 
     Conversion definition (post_promo_visit):
       Treated:  completed at least one discount/BOGO offer
       Control:  made a purchase in the 2nd half of the observation window
-                (time_h > median(max_time))  — temporal proxy for retention
     """
-    # ── Treated customers ────────────────────────────────────────────────────
-    incentive_offers = events[
-        (events["event"] == "offer received") &
-        (events["offer_type"].isin(["bogo", "discount"]))
-    ]
-    treated_ids = set(incentive_offers["customer_id"])
+    received = events[events["event"] == "offer received"]
 
-    # ── Offer completions (treated response) ─────────────────────────────────
-    completions = events[
-        (events["event"] == "offer completed") &
-        (events["offer_type"].isin(["bogo", "discount"]))
-    ]
-    completed_ids = set(completions["customer_id"])
+    incentive_ids = set(
+        received[received["offer_type"].isin(["bogo", "discount"])]["customer_id"]
+    )
+    info_ids = set(
+        received[received["offer_type"] == "informational"]["customer_id"]
+    )
 
-    # ── Control response: purchase in 2nd half of timeline ───────────────────
+    # Pure-incentive treated: got discount/BOGO but NO informational
+    pure_treated  = incentive_ids - info_ids
+    # Informational-only control: got informational but NO incentive offer
+    pure_control  = info_ids - incentive_ids
+    # Exclude mixed (got both types) — too confounded
+
+    # Completions for treated group
+    completions = set(
+        events[
+            (events["event"] == "offer completed") &
+            (events["offer_type"].isin(["bogo", "discount"]))
+        ]["customer_id"]
+    )
+
+    # Late-period purchase for control proxy
     max_time = events["time_h"].max()
-    late_txn = events[
-        (events["event"] == "transaction") &
-        (events["time_h"] > max_time / 2)
-    ]
-    late_buyers = set(late_txn["customer_id"])
+    late_buyers = set(
+        events[
+            (events["event"] == "transaction") &
+            (events["time_h"] > max_time / 2)
+        ]["customer_id"]
+    )
 
-    # ── Promo type for treated customers (most frequent offer type received) ──
+    # Promo type (dominant offer type for treated customers)
     promo_type_map = (
-        incentive_offers.groupby("customer_id")["offer_type"]
+        received[received["customer_id"].isin(pure_treated)]
+        .groupby("customer_id")["offer_type"]
         .agg(lambda x: x.value_counts().index[0])
         .to_dict()
     )
 
-    all_customers = events["customer_id"].unique()
     records = []
-    for cid in all_customers:
-        treated = cid in treated_ids
-        if treated:
-            converted = int(cid in completed_ids)
-            ptype = promo_type_map.get(cid, "discount")
-        else:
-            converted = int(cid in late_buyers)
-            ptype = "none"
+    for cid in pure_treated:
         records.append({
             "customer_id":      cid,
-            "is_treated":       int(treated),
-            "post_promo_visit": converted,
-            "promo_type":       ptype,
+            "is_treated":       1,
+            "post_promo_visit": int(cid in completions),
+            "promo_type":       promo_type_map.get(cid, "discount"),
         })
-    return pd.DataFrame(records)
+    for cid in pure_control:
+        records.append({
+            "customer_id":      cid,
+            "is_treated":       0,
+            "post_promo_visit": int(cid in late_buyers),
+            "promo_type":       "informational",
+        })
+
+    labels = pd.DataFrame(records)
+    n_t = (labels["is_treated"] == 1).sum()
+    n_c = (labels["is_treated"] == 0).sum()
+    print(f"   Treated (incentive-only) : {n_t:,}  |  Control (info-only) : {n_c:,}  "
+          f"|  Excluded (mixed) : {len(incentive_ids & info_ids):,}")
+    return labels
 
 
 def build_pos(events: pd.DataFrame, labels: pd.DataFrame,

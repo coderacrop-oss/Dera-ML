@@ -29,14 +29,34 @@ RULE SCHEMA
 ===========
 Both SURE_THING_RULES and PERSUADABLE_RULES share the same field schema:
 
-  id            str         unique rule identifier
-  tiers         list[str]   cluster tiers that match; omit = all tiers
-  time_context  list[str]   ["peak"] | ["off_peak"]; omit = both
-  rfm_min       int|str     minimum rfm_decile_segment (1–10); str = CONFIG key to resolve
-  is_spike_min  float       minimum is_campaign_spike (0–1)
-  uplift_min    float|str   minimum uplift_score; str = CONFIG key to resolve
-  rate_key      str         key into CONFIG["promo_cost_rates"]
-  action        str         action name; {bundle} is replaced with the customer's bundle
+  id              str         unique rule identifier
+  tiers           list[str]   cluster tiers that match; omit = all tiers
+  time_context    list[str]   ["peak"] | ["off_peak"]; omit = both
+  rfm_min         int|str     minimum rfm_decile_segment (1–10); str = CONFIG key to resolve
+  is_spike_min    float       minimum is_campaign_spike (0–1)
+  uplift_min      float|str   minimum uplift_score; str = CONFIG key to resolve
+  rate_key        str         key into CONFIG["promo_cost_rates"]
+  action          str         action name; {bundle} is replaced with the customer's bundle
+  dotdash_offer   dict        DotDash campaign output spec (see below)
+
+DOTDASH OFFER SCHEMA
+====================
+Each rule carries a ``dotdash_offer`` dict that tells DotDash exactly how to
+create the draft campaign.  DotDash supports two output types for AI plans
+(แต้มตัวคูณใช้ไม่ได้กับแผน AI ที่ส่งครั้งเดียว):
+
+  offer_type      "points" | "coupon"
+  points_amount   int     — points to award (offer_type = "points" only)
+  coupon_type     "fixed" | "percent"  (offer_type = "coupon" only)
+  coupon_value    float   — THB or % off  (offer_type = "coupon" only)
+  min_spend       float   — minimum spend to trigger offer (0 = no minimum)
+  expiry_days     int     — days until offer expires after receipt
+
+Helper
+------
+  get_dotdash_offer(rule_id_or_rule, aov=None) → dict
+      Resolves the offer for a rule, optionally scaling coupon_value
+      proportionally when aov is provided (future use).
 
 EVALUATION STRATEGY
 ===================
@@ -120,12 +140,16 @@ SURE_THING_RULES = [
         "tiers":   ["cant_lose"],
         "rate_key": "vip_winback",
         "action":  "VIP Win-Back: กลับมาเป็น VIP อีกครั้ง",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":      "st_newcust_welcome",
         "tiers":   ["new_customer"],
         "rate_key": "new_customer_welcome",
         "action":  "Welcome: ยินดีต้อนรับ กลับมาอีกนะ!",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30},
     },
     # General rules — apply to all tiers
     {
@@ -134,6 +158,8 @@ SURE_THING_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
         "action":       "VIP Reward: แจกแต้ม X2",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "st_vip_early_access_peak",
@@ -141,11 +167,15 @@ SURE_THING_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "peak_upsell",
         "action":       "VIP Early Access",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 50,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":       "st_loyalty_nurture",
         "rate_key": "vip_points",
         "action":   "Loyalty Nurture: แต้มสะสม",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 50,
+                          "min_spend": 0, "expiry_days": 30},
     },
 ]
 
@@ -161,6 +191,8 @@ PERSUADABLE_RULES = [
         "tiers": ["loyal"],
         "rate_key": "vip_points",
         "action": "Loyalty Reward: {bundle} + แต้มพิเศษ",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 80,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "loyal_vip_reward",
@@ -168,12 +200,16 @@ PERSUADABLE_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
         "action":       "VIP Reward: แจกแต้ม X2",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "loyal_standard",
         "tiers":        ["loyal"],
         "rate_key":     "standard",
         "action":       "Loyal Offer: {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
 
     # ── Potential Loyalist: high R, medium F — build the habit ───────────────
@@ -182,6 +218,8 @@ PERSUADABLE_RULES = [
         "tiers": ["potential_loyalist"],
         "rate_key": "vip_points",
         "action": "Habit Builder: สะสมแต้ม เพิ่มความถี่",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 60,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "potloyal_offpeak_vip",
@@ -189,6 +227,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak_vip",
         "action":       "Loyalty Builder Off-Peak: แต้มพิเศษช่วงเงียบ",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 60,
+                          "min_spend": 0, "expiry_days": 30},
     },
 
     # ── Promising: high R, low F, medium M — encourage return visit ──────────
@@ -197,6 +237,8 @@ PERSUADABLE_RULES = [
         "tiers": ["promising"],
         "rate_key": "standard",
         "action": "Re-engage: {bundle} พิเศษสำหรับคุณ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "promising_offpeak",
@@ -204,6 +246,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak",
         "action":       "Re-engage Off-Peak: ส่วนลดพิเศษกลับมาหาเรา",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
 
     # ── Need Attention: medium all, starting to drift ─────────────────────────
@@ -212,6 +256,8 @@ PERSUADABLE_RULES = [
         "tiers": ["need_attention"],
         "rate_key": "standard",
         "action": "เราเป็นห่วง: {bundle} + ส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "needattn_offpeak_traffic",
@@ -219,6 +265,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak_traffic",
         "action":       "Re-engage: ส่วนลดพิเศษช่วงเงียบสำหรับคุณ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 14},
     },
 
     # ── About to Sleep: recency growing, low-medium F — urgent before dark ───
@@ -227,12 +275,16 @@ PERSUADABLE_RULES = [
         "tiers": ["about_to_sleep"],
         "rate_key": "off_peak",
         "action": "เราคิดถึงคุณ: {bundle} ก่อนที่จะไม่ได้เจอกัน",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "aboutsleep_traffic_driver",
         "tiers":        ["about_to_sleep"],
         "rate_key":     "off_peak_traffic",
         "action":       "Last Chance: ส่วนลดพิเศษ กลับมาหาเราเลย",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 7},
     },
 
     # ── New Customer: onboarding — light welcome offer to earn 2nd visit ────────
@@ -242,6 +294,8 @@ PERSUADABLE_RULES = [
         "time_context": ["peak"],
         "rate_key":     "new_customer_welcome",
         "action":       "Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "newcust_welcome_offpeak",
@@ -249,6 +303,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "new_customer_welcome",
         "action":       "Welcome Off-Peak: กลับมาช้อปรับส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30},
     },
 
     # ── Churn Risk: early warning — act before the customer fully drifts ──────
@@ -257,6 +313,8 @@ PERSUADABLE_RULES = [
         "tiers": ["churn_risk"],
         "rate_key": "churn_rescue",
         "action": "Early Win-Back: {bundle} ก่อนที่จะไม่กลับมา",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 12.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "churnrisk_offpeak_traffic",
@@ -264,6 +322,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak_traffic",
         "action":       "Churn Rescue: ส่วนลดพิเศษช่วงเงียบ เราคิดถึงคุณ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 14},
     },
 
     # ── Can't Lose Them: VIP drifting — aggressive win-back ───────────────────
@@ -272,6 +332,8 @@ PERSUADABLE_RULES = [
         "tiers": ["cant_lose"],
         "rate_key": "vip_winback",
         "action": "VIP Win-Back: {bundle} + แต้มพิเศษ X3",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "cantlose_aggressive_offpeak",
@@ -279,6 +341,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak_traffic",
         "action":       "VIP Win-Back: กลับมาช้อปรับส่วนลดพิเศษ VIP",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 7},
     },
 
     # ── Champions: VIP / loyalty only — never a % discount ───────────────────
@@ -287,6 +351,8 @@ PERSUADABLE_RULES = [
         "tiers": ["champions"],
         "rate_key": "vip_points",
         "action": "VIP Bundle: {bundle}",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 150,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "champ_early_access_peak",
@@ -295,6 +361,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "peak_upsell",
         "action":       "VIP Early Access",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 80,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "champ_early_access_offpeak",
@@ -303,6 +371,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
         "action":       "VIP Early Access",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":      "champ_vip_reward",
@@ -310,6 +380,8 @@ PERSUADABLE_RULES = [
         "rfm_min": "vip_rfm_threshold",
         "rate_key": "vip_points",
         "action":  "VIP Reward: แจกแต้ม X2",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
 
     # ── At-Risk: discount bundle first, then standard retention ──────────────
@@ -318,6 +390,8 @@ PERSUADABLE_RULES = [
         "tiers": ["at_risk"],
         "rate_key": "standard",
         "action": "Discount 15%: ซื้อ {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "atrisk_standard_offpeak",
@@ -325,6 +399,8 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak",
         "action":       "Standard Retention",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "atrisk_standard_peak",
@@ -332,6 +408,8 @@ PERSUADABLE_RULES = [
         "time_context": ["peak"],
         "rate_key":     "standard",
         "action":       "Standard Retention",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "atrisk_offpeak_traffic",
@@ -340,6 +418,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "mid_rfm_threshold",
         "rate_key":     "off_peak_traffic",
         "action":       "Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 14},
     },
 
     # ── Hibernating: reactivation incentive ──────────────────────────────────
@@ -348,12 +428,16 @@ PERSUADABLE_RULES = [
         "tiers": ["hibernating"],
         "rate_key": "off_peak",
         "action": "กลับมาช้อป: {bundle} ลด 20%",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 20.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":    "hiber_reactivation_traffic",
         "tiers": ["hibernating"],
         "rate_key": "off_peak_traffic",
         "action": "Reactivation: {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 14},
     },
 
     # ── Mid: contextual upsell ladder ─────────────────────────────────────────
@@ -364,6 +448,8 @@ PERSUADABLE_RULES = [
         "is_spike_min": 0.5,
         "rate_key":     "festival",
         "action":       "Standard Retention (Festival Guard)",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_offpeak_traffic",
@@ -372,6 +458,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "mid_rfm_threshold",
         "rate_key":     "off_peak_traffic",
         "action":       "Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 22.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "mid_offpeak_vip_points",
@@ -380,6 +468,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "mid_rfm_threshold",
         "rate_key":     "off_peak_vip",
         "action":       "Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 60,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_vip_reward_peak",
@@ -388,6 +478,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "peak_upsell",
         "action":       "VIP Reward: แจกแต้ม X2",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 80,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_vip_reward_offpeak",
@@ -396,6 +488,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
         "action":       "VIP Reward: แจกแต้ม X2",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_vip_early_access_peak",
@@ -404,6 +498,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      9,   # rfm >= 9 (stricter than vip_rfm=8)
         "rate_key":     "peak_upsell",
         "action":       "VIP Early Access",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 80,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_vip_early_access_offpeak",
@@ -412,6 +508,8 @@ PERSUADABLE_RULES = [
         "rfm_min":      9,
         "rate_key":     "vip_points",
         "action":       "VIP Early Access",
+        "dotdash_offer": {"offer_type": "points", "points_amount": 100,
+                          "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_bundle_upsell_peak",
@@ -420,6 +518,8 @@ PERSUADABLE_RULES = [
         "uplift_min":   "high_uplift_threshold",
         "rate_key":     "peak_upsell",
         "action":       "Bundle Upsell: {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 8.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_bundle_upsell_offpeak",
@@ -428,6 +528,8 @@ PERSUADABLE_RULES = [
         "uplift_min":   "high_uplift_threshold",
         "rate_key":     "bundle",
         "action":       "Bundle Upsell: {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
     {
         "id":           "mid_standard_peak",
@@ -435,6 +537,8 @@ PERSUADABLE_RULES = [
         "time_context": ["peak"],
         "rate_key":     "standard",
         "action":       "Standard Retention",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 30},
     },
     {
         "id":           "mid_standard_offpeak",
@@ -442,5 +546,46 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rate_key":     "off_peak",
         "action":       "Standard Retention",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14},
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# DotDash offer helper
+# ---------------------------------------------------------------------------
+
+def get_dotdash_offer(rule: dict) -> dict:
+    """Return the DotDash offer spec for a rule, with safe defaults.
+
+    Parameters
+    ----------
+    rule : dict
+        A rule dict from SURE_THING_RULES or PERSUADABLE_RULES.
+
+    Returns
+    -------
+    dict
+        ``{offer_type, points_amount?, coupon_type?, coupon_value?,
+           min_spend, expiry_days}``
+    """
+    offer = dict(rule.get("dotdash_offer") or {})
+    if not offer:
+        # Fallback: infer from rate_key
+        rk = rule.get("rate_key", "")
+        if "points" in rk or "vip" in rk:
+            offer = {"offer_type": "points", "points_amount": 50,
+                     "min_spend": 0, "expiry_days": 30}
+        else:
+            offer = {"offer_type": "coupon", "coupon_type": "percent",
+                     "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30}
+    return offer
+
+
+def get_dotdash_offer_by_id(rule_id: str) -> dict:
+    """Look up a rule by id across both rule lists and return its DotDash offer."""
+    for rule in SURE_THING_RULES + PERSUADABLE_RULES:
+        if rule.get("id") == rule_id:
+            return get_dotdash_offer(rule)
+    return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}

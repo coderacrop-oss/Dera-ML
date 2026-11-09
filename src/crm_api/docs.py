@@ -42,6 +42,12 @@ TAGS = [
     {"name": "ลูกค้า", "description": "ข้อเสนอและเวลาส่งของลูกค้ารายคน"},
     {"name": "ปฏิทิน", "description": "ไฟล์ปฏิทิน .ics ให้แอปปฏิทิน subscribe"},
     {"name": "การรัน pipeline", "description": "ส่งรายการขายเข้ามาให้รัน pipeline ตามต้องการ ดูสถานะงาน และดูผลของแต่ละ Layer"},
+    {"name": "ML แคมเปญ", "description": "รัน ML pipeline วางแผนแคมเปญ ตรวจสอบความเป็นไปได้ ดูประวัติ และบันทึกผลจริง"},
+    {"name": "สุขภาพลูกค้า", "description": "วิเคราะห์สัดส่วน 10 กลุ่ม IBM RFM คะแนนสุขภาพฐานลูกค้า แนวโน้ม และ alert"},
+    {"name": "เนื้อหา", "description": "สร้าง creative content สำหรับแคมเปญด้วย AI (ต้องการ ANTHROPIC_API_KEY)"},
+    {"name": "กลุ่มเป้าหมาย", "description": "ส่งออก audience list สำหรับ Meta Ads / LINE OA"},
+    {"name": "โมเดล", "description": "ตรวจสอบสถานะและ trigger การ retrain โมเดล ML"},
+    {"name": "วันที่แนะนำ", "description": "คำนวณวันที่เหมาะสมที่สุดสำหรับส่งแคมเปญ โดยรวม buy-day affinity, payday window และ campaign overlap"},
 ]
 
 ERRORS_TH = {
@@ -194,3 +200,160 @@ RUNS_LAYERS = dict(
 
 ERR_RUNS_START = {409: {"description": "มีงานรันอยู่แล้ว (`run_in_progress`) รอให้เสร็จก่อน"},
                   413: {"description": "ไฟล์ CSV ใหญ่เกินกำหนด (`csv_too_large`)"}}
+
+# ---------------------------------------------------------------------------
+# Phase 2 — ML Campaign, Segment Health, Content, Audience, Model endpoints
+# ---------------------------------------------------------------------------
+
+P_STORE_ID = "รหัสร้านค้า (store identifier) ที่ใช้จัดเก็บข้อมูลและประวัติแคมเปญ"
+P_PLAN_ID  = "รหัสแผนแคมเปญ (`plan_id`) ที่ได้จาก POST /campaign/plan"
+P_LIMIT_H  = "จำนวนรายการต่อหน้า (1–100) ค่าตั้งต้น 20"
+P_OFFSET   = "ข้ามกี่รายการ (สำหรับ pagination) ค่าตั้งต้น 0"
+
+CAMPAIGN_PLAN = dict(
+    tags=["ML แคมเปญ"], summary="สร้างแผนแคมเปญด้วย ML",
+    description=(
+        "รับไฟล์ POS (CSV base64) → รัน ML pipeline ครบ 4 Layer → คืนแผนแคมเปญพร้อม:\n\n"
+        "- **สรุปงบ / กำไรคาดการณ์ / ROI**\n"
+        "- **action_breakdown**: จำนวนลูกค้าและค่าใช้จ่ายแยกตาม action type\n"
+        "- **segment_breakdown**: จำนวนลูกค้าที่ ML เลือกแยกตาม segment\n"
+        "- **feasibility**: เป้าหมายทำได้ไหม และ max profit ที่ทำได้จริง\n\n"
+        "mode `budget` → ต้องระบุ `budget` (THB) | mode `target_profit` → ต้องระบุ `target_profit` (THB)\n\n"
+        "ไฟล์ POS จะถูกบันทึกและนำไปใช้กับ `/segment/health` ของร้านนั้นโดยอัตโนมัติ"
+    ),
+    response_description="แผนแคมเปญพร้อม plan_id สำหรับอ้างอิง",
+)
+
+CAMPAIGN_ANALYZE = dict(
+    tags=["ML แคมเปญ"], summary="ตรวจสอบความเป็นไปได้ของแผน",
+    description=(
+        "ประเมินแผนที่ผู้ใช้ร่างเองผ่าน 4 ด้าน:\n\n"
+        "1. **profitability** — กำไรสุทธิหลังหักค่าใช้จ่ายเป็นบวกไหม\n"
+        "2. **overlap** — มีลูกค้าที่เพิ่งได้รับ promo ภายใน 21 วันไหม\n"
+        "3. **segment_readiness** — segment ที่เลือกมีลูกค้าเพียงพอไหม\n"
+        "4. **budget_efficiency** — allocate งบดีแล้วหรือสามารถ optimize ได้\n\n"
+        "คืน `overall_verdict`: `recommended` / `proceed_with_caution` / `not_recommended`\n\n"
+        "ไม่บันทึกแผน — ใช้สำหรับ sanity check ก่อน commit"
+    ),
+    response_description="ผลการตรวจสอบ 4 ด้านพร้อม overall_verdict",
+)
+
+CAMPAIGN_HISTORY = dict(
+    tags=["ML แคมเปญ"], summary="ประวัติแผนแคมเปญของร้านค้า",
+    description=(
+        "ดึงรายการแผนที่สร้างผ่าน `/campaign/plan` ทั้งหมดของร้าน เรียงจากใหม่ไปเก่า\n\n"
+        "แต่ละรายการมี `plan_id`, วันที่สร้าง, โหมด, จำนวนลูกค้าที่เลือก, กำไรคาดการณ์ และ ROI\n\n"
+        "รองรับ pagination ด้วย `limit` และ `offset`"
+    ),
+    response_description="รายการแผนเรียงจากใหม่ไปเก่า",
+)
+
+CAMPAIGN_RECORD_OUTCOME = dict(
+    tags=["ML แคมเปญ"], summary="บันทึกผลจริงของแคมเปญ",
+    description=(
+        "บันทึกรายได้จริง จำนวนลูกค้าที่ตอบสนอง และระยะเวลาวัดผล เพื่อ:\n\n"
+        "- เปรียบเทียบกับประมาณการของ ML\n"
+        "- ใช้เป็น signal ในการ calibrate โมเดลรอบถัดไป\n\n"
+        "ผลจะถูกจัดเก็บและนำไปคำนวณ calibration stats (conversion rate จริง vs คาด) "
+        "คืน `calibration_stats` ถ้ามีประวัติ outcome เพียงพอ"
+    ),
+    response_description="ยืนยันการบันทึกและ calibration stats (ถ้ามี)",
+)
+
+AUDIENCE_EXPORT = dict(
+    tags=["กลุ่มเป้าหมาย"], summary="ส่งออก audience list สำหรับ Meta Ads / LINE OA",
+    description=(
+        "รับ `plan_id` → ดึงรายชื่อลูกค้าที่ ML เลือก → จับคู่กับข้อมูล CRM (ถ้าให้มา) → ส่งออก:\n\n"
+        "- **Meta Custom Audience**: hashed email/phone สำหรับ Facebook/Instagram\n"
+        "- **LINE OA Audience**: LINE userId สำหรับ Broadcast\n\n"
+        "`crm_data` เป็น optional (base64 CSV) ถ้าไม่ให้มาจะคืนแค่ customer_id list"
+    ),
+    response_description="ผลการ export พร้อม export_id และสถิติการจับคู่",
+)
+
+CONTENT_GENERATE = dict(
+    tags=["เนื้อหา"], summary="สร้าง content แคมเปญด้วย AI",
+    description=(
+        "สร้างข้อความ / คำบรรยายโปรโมชัน / caption สำหรับแคมเปญโดยใช้ Anthropic Claude\n\n"
+        "ต้องการตัวแปรสภาพแวดล้อม `ANTHROPIC_API_KEY` — ถ้าไม่มีจะตอบ `503`\n\n"
+        "`brief_type` รองรับ 2 แบบ:\n"
+        "- `ml_driven` — ML กำหนด target segment และ action type ให้\n"
+        "- `brand_driven` — ผู้ใช้กำหนด tone, offer, และเนื้อหาเอง\n\n"
+        "`brand_kit` ใส่ชื่อร้าน สี น้ำเสียง และ emoji ที่แบรนด์ใช้ประจำ"
+    ),
+    response_description="เนื้อหาที่สร้างขึ้น พร้อม content_id",
+    responses={503: {"description": "ไม่มี ANTHROPIC_API_KEY — ฟีเจอร์นี้ยังไม่เปิดใช้งาน"}},
+)
+
+CAMPAIGN_EXECUTE = dict(
+    tags=["ML แคมเปญ"], summary="ส่งแคมเปญผ่าน LINE OA หรือ Meta Ads",
+    description=(
+        "รับ `plan_id` → ดึง audience จากแผน → ส่งผ่าน channel ที่เลือก:\n\n"
+        "- **line_oa**: ส่ง LINE Multicast message ให้ user_ids ทุกคนในแผน\n"
+        "- **meta**: รัน Meta Ads pipeline 6 ขั้นตอน "
+        "(upload audience → lookalike → campaign → ad set → creative → ad)\n\n"
+        "อัปเดต `campaign_history.jsonl` ด้วย `executed_at`, `channel`, `delivery_stats`\n\n"
+        "คืน `{execution_id, status, delivery_summary}` ทันที\n\n"
+        "ต้องการ env vars:\n"
+        "- LINE: `LINE_CHANNEL_ACCESS_TOKEN`\n"
+        "- Meta: `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`, `META_PAGE_ID`"
+    ),
+    response_description="ผลการส่ง execution_id และ delivery_summary",
+    responses={
+        503: {"description": "ไม่มี credentials ของช่องทางที่เลือก"},
+    },
+)
+
+MODEL_RETRAIN_REQUEST = dict(
+    tags=["โมเดล"], summary="ส่งคำขอ retrain โมเดล (queue ไว้รอ scheduler)",
+    description=(
+        "บันทึกคำขอ retrain ลงคิว — scheduler จะ pickup ในรอบกลางคืนหรือตามกำหนด\n\n"
+        "ต่างจาก `POST /model/retrain` ที่รัน background job ทันที endpoint นี้ใช้เมื่อ:\n\n"
+        "- DotDash ต้องการแจ้งว่าข้อมูลใหม่พร้อมแล้ว (เช่น POS 12 เดือนครบ)\n"
+        "- ร้านสังเกตว่าผลลัพธ์คลาดเคลื่อนและต้องการ recalibrate\n\n"
+        "``psm_mode`` กำหนดวิธี PSM: ``discount`` (มีคอลัมน์ส่วนลด) · "
+        "``campaign_list`` (มีประวัติ campaign) · ``proxy`` (ใช้ RFM proxy) · "
+        "``auto`` (ระบบเลือกให้)"
+    ),
+    response_description="request_id และสถานะ queued",
+)
+
+MODEL_RETRAIN = dict(
+    tags=["โมเดล"], summary="สั่ง retrain โมเดล ML (async)",
+    description=(
+        "Trigger การ retrain PSM R-Learner uplift model ในพื้นหลัง\n\n"
+        "คืน `job_id` ทันที — ตรวจสอบสถานะได้ที่ `GET /v1/model/status`\n\n"
+        "mode `psm_mode` กำหนดวิธี identify treated group:\n"
+        "- `discount` — ใช้แถวที่มี discount > 0\n"
+        "- `campaign_list` — ใช้ customer list ที่เคยส่ง campaign\n"
+        "- `proxy` — ประมาณจาก RFM pattern"
+    ),
+    response_description="job_id สำหรับตรวจสอบสถานะภายหลัง",
+)
+
+SEND_DATE_RECOMMEND = dict(
+    tags=["วันที่แนะนำ"], summary="แนะนำวันที่ดีที่สุดสำหรับส่ง campaign",
+    description=(
+        "คำนวณคะแนนวันที่ทุกวันใน ``month`` จาก 3 สัญญาณ:\n\n"
+        "- **buy-day affinity** — วันในสัปดาห์ / วันในเดือนที่ segment นี้ซื้อบ่อย (จาก POS ย้อนหลัง 90 วัน)\n"
+        "- **payday window boost** — ช่วงเงินเดือนออก (25–สิ้นเดือน และ 1–5)\n"
+        "- **campaign overlap penalty** — หักคะแนนถ้ามี campaign อื่นในช่วง cooldown\n\n"
+        "ต้องอัปโหลด POS ผ่าน `/campaign/plan` ก่อน"
+    ),
+    response_description="วันที่แนะนำ, คะแนน, เหตุผล, และ alternatives",
+)
+
+SEGMENT_HEALTH = dict(
+    tags=["สุขภาพลูกค้า"], summary="วิเคราะห์สุขภาพฐานลูกค้า (IBM 10 กลุ่ม)",
+    description=(
+        "รัน Layer 1 segmentation (RFM) บนไฟล์ POS ล่าสุดของร้าน → คืน 10 กลุ่ม IBM ครบเสมอ:\n\n"
+        "- **count** / **trend** / **trend_pct**: จำนวน, ทิศทาง, % เปลี่ยนแปลงจาก snapshot ก่อน\n"
+        "- **urgency_score**: 0–100 ความเร่งด่วนในการทำ campaign\n"
+        "- **health_score**: สัดส่วน healthy / at_risk / churned และ label (ดี / ปานกลาง / ต้องดูแล)\n"
+        "- **alerts**: กลุ่มที่โตผิดปกติ พร้อมระดับ warning/info\n"
+        "- **recommendation**: เป้าหมาย campaign ที่แนะนำ (win_back / retain_loyal / maximize_profit)\n\n"
+        "ต้องอัปโหลดไฟล์ผ่าน `/campaign/plan` ก่อนอย่างน้อย 1 ครั้ง\n\n"
+        "snapshot จะถูกบันทึกทุกครั้งที่เรียก เพื่อใช้คำนวณ trend ในครั้งถัดไป"
+    ),
+    response_description="สุขภาพฐานลูกค้าปัจจุบัน พร้อม 10 กลุ่ม IBM",
+)

@@ -152,6 +152,61 @@ def load_and_preprocess_csv(file_path):
     log("L0", "load_complete", rows=len(df), unique_customers=df["customer_id"].nunique(), file=file_path)
     return df
 
+def _segment_urgency(segment_name: str, customer_count: int, avg_monetary: float,
+                     trend: str = "stable") -> dict:
+    """Compute urgency score and action priority for a segment.
+
+    Score = base_priority × size_weight × trend_weight × value_weight
+    Returns dict with: urgency_score (0–100), priority (critical/high/medium/low/monitor),
+    action_label, priority_color
+    """
+    name = segment_name.lower().split(" (")[0]  # strip duplicate suffix like "At-Risk (2)"
+
+    # Base priority per segment type (business logic: who loses most if ignored)
+    base = {
+        "can't lose them": 95,
+        "at-risk":         85,
+        "about to sleep":  70,
+        "hibernating":     55,
+        "need attention":  60,
+        "champions":       40,   # monitor, not urgent — already buying
+        "loyal customers": 35,
+        "potential loyalist": 50,
+        "promising":       45,
+        "lost":            20,   # low ROI, far gone
+    }.get(name, 50)
+
+    # Trend multiplier
+    trend_w = {"growing": 1.25, "stable": 1.0, "shrinking": 0.85}.get(trend, 1.0)
+
+    # Size weight: larger segment = more impact (log scale, capped at 1.3x)
+    import math
+    size_w = min(1.3, 1.0 + math.log1p(customer_count) / 30)
+
+    # Value weight: high AOV segment = higher urgency (1.0 baseline at ฿500)
+    value_w = min(1.2, max(0.9, avg_monetary / 500))
+
+    score = min(100, round(base * trend_w * size_w * value_w))
+
+    if score >= 80:
+        priority, color, label = "critical", "red",    "ทำก่อน"
+    elif score >= 60:
+        priority, color, label = "high",     "orange",  "ควรทำ"
+    elif score >= 40:
+        priority, color, label = "medium",   "yellow",  "ทำได้"
+    elif score >= 20:
+        priority, color, label = "low",      "green",   "รักษา"
+    else:
+        priority, color, label = "monitor",  "gray",    "รอก่อน"
+
+    return {
+        "urgency_score": score,
+        "priority":      priority,
+        "priority_color": color,
+        "action_label":  label,
+    }
+
+
 def _ibm_segment_name(r_norm: float, f_norm: float, m_norm: float) -> str:
     """Map rank-percentile RFM scores to IBM segment name.
 
@@ -269,13 +324,15 @@ def layer1_csv_segmentation(df):
         count = _used_names.get(base_name, 0)
         seg_name = base_name if count == 0 else f"{base_name} ({count + 1})"
         _used_names[base_name] = count + 1
+        urgency = _segment_urgency(seg_name, int(row["count"]), round(row["monetary"], 2))
         segments.append({
             "cluster_id": int(row["cluster"]),
             "segment_name": seg_name,
             "customer_count": int(row["count"]),
             "avg_recency_days": round(row["recency"], 1),
             "avg_frequency": round(row["frequency"], 1),
-            "avg_monetary": round(row["monetary"], 2)
+            "avg_monetary": round(row["monetary"], 2),
+            **urgency,
         })
 
     result = sorted(segments, key=lambda x: x["segment_name"])
@@ -334,6 +391,7 @@ def _segments_from_context(ctx):
         count = _used_names.get(base_name, 0)
         seg_name = base_name if count == 0 else f"{base_name} ({count + 1})"
         _used_names[base_name] = count + 1
+        urgency = _segment_urgency(seg_name, int(row["count"]), round(row["monetary"], 2))
         segments.append({
             "cluster_id":      int(row["cluster"]),
             "segment_name":    seg_name,
@@ -341,6 +399,7 @@ def _segments_from_context(ctx):
             "avg_recency_days": round(row["recency"], 1),
             "avg_frequency":   round(row["frequency"], 1),
             "avg_monetary":    round(row["monetary"], 2),
+            **urgency,
         })
 
     n_clusters = len(segments)

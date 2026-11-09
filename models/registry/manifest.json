@@ -1,5 +1,5 @@
 {
-  "current": "v7",
+  "current": "v11",
   "versions": [
     {
       "version": "v1",
@@ -217,6 +217,65 @@
             "note": "pooled across 2 stores"
           }
         }
+      },
+      "legacy": false
+    },
+    {
+      "version": "v8",
+      "sha256": "9c5ac4202ddfe85eb79234b0e118a9893a7cb712a1fc46ae8e8189387ac4cb4c",
+      "created_at": "2026-11-06T05:38:31.503029+00:00",
+      "approved_by": "auto",
+      "approved_at": "2026-11-06T05:38:31.503043+00:00",
+      "provenance": "train_rlearner.py --dataset psm --psm-mode discount",
+      "metrics": {
+        "auuc": 0.0032734761281979687,
+        "dataset": "psm",
+        "psm_balanced": true,
+        "psm_pairs": 165
+      },
+      "legacy": false
+    },
+    {
+      "version": "v9",
+      "sha256": "8758daa13f1f7c793c248f0ffa5685cd3f5989dad3dac5fd1ecf0422fddc112b",
+      "created_at": "2026-11-06T05:40:16.318961+00:00",
+      "approved_by": "auto",
+      "approved_at": "2026-11-06T05:40:16.319032+00:00",
+      "provenance": "train_rlearner.py --dataset psm --psm-mode discount (re-promoted)",
+      "metrics": {
+        "auuc": 0.0033,
+        "dataset": "psm",
+        "psm_balanced": true,
+        "psm_pairs": 165
+      },
+      "legacy": false
+    },
+    {
+      "version": "v10",
+      "sha256": "12d1b0a9e1c193630350d624135d5307493bda5ae0b0a99c5d11dac1bb55b0b6",
+      "created_at": "2026-11-06T05:50:31.074229+00:00",
+      "approved_by": "auto",
+      "approved_at": "2026-11-06T05:50:31.074264+00:00",
+      "provenance": "train_rlearner.py --dataset psm --psm-mode discount (with predict_control_proba)",
+      "metrics": {
+        "auuc": 0.0033,
+        "dataset": "psm",
+        "psm_pairs": 165,
+        "baseline_ctrl": 0.655
+      },
+      "legacy": false
+    },
+    {
+      "version": "v11",
+      "sha256": "e956715536359c95ded7c817d90d0b6476948658748bcca4347e992c31b0d0ee",
+      "created_at": "2026-11-06T08:33:49.486271+00:00",
+      "approved_by": "auto",
+      "approved_at": "2026-11-06T08:33:49.486283+00:00",
+      "provenance": "train_rlearner.py --dataset psm (serving-feature-aligned)",
+      "metrics": {
+        "auuc": 0.003,
+        "dataset": "psm",
+        "feature_aligned": true
       },
       "legacy": false
     }

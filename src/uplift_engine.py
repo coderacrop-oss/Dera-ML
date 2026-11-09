@@ -291,6 +291,92 @@ def _train_xlearner(treat_data, ctrl_data, features, n_estimators=200):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stable IBM 10-segment rule classifier (absolute thresholds, no k-means)
+# ─────────────────────────────────────────────────────────────────────────────
+# Thresholds are configurable via CONFIG["rfm_segments"].  Defaults cover
+# typical Thai F&B / retail POS (transaction units = visits, recency = days).
+#
+# Why absolute R/F + dataset-relative M percentiles?
+#   - R (days since last visit) and F (visit count) have natural absolute meaning
+#     → same customer always gets the same label regardless of dataset composition
+#   - M (total spend) is in local currency → p25/p75 of the CURRENT dataset keeps
+#     it calibrated without drifting every run (only shifts if spend distribution
+#     changes dramatically, not from random cluster re-labeling)
+_RFM_SEG_DEFAULTS: dict = {
+    # Recency bands (days)
+    "r_recent":   30,   # ≤ 30d = recent
+    "r_active":   90,   # ≤ 90d = still active
+    "r_lapsing":  180,  # ≤ 180d = lapsing
+    # r > 180d → Hibernating; r > 365d + low F → Lost
+    "r_lost":     365,
+    # Frequency bands (number of transactions)
+    "f_champion": 8,    # ≥ 8 = champion-level
+    "f_loyal":    6,    # ≥ 6 = loyal
+    "f_cant_lose":5,    # ≥ 5 = worth saving
+    "f_active":   3,    # ≥ 3 = actively buying
+    "f_low":      2,    # ≤ 2 = low engagement
+    # Lost threshold: r > r_lost AND f <= f_low
+}
+
+
+def _rfm_rule_segment(r: float, f: int, m: float,
+                      m_p25: float, m_p75: float,
+                      cfg: dict | None = None) -> str:
+    """Classify one customer into an IBM 10-segment using stable absolute rules.
+
+    Args:
+        r:     recency in days (lower = more recent)
+        f:     frequency (number of transactions)
+        m:     monetary (total spend)
+        m_p25: 25th percentile of M in the dataset (low-value threshold)
+        m_p75: 75th percentile of M in the dataset (high-value threshold)
+        cfg:   override dict merged on top of _RFM_SEG_DEFAULTS
+
+    Returns one of: Champions, Loyal Customers, Potential Loyalist,
+                    New Customers, Promising, Need Attention,
+                    About to Sleep, At-Risk, Can't Lose Them, Hibernating, Lost
+    """
+    c = dict(_RFM_SEG_DEFAULTS)
+    if cfg:
+        c.update(cfg)
+
+    high_m = m >= m_p75
+    low_m  = m <  m_p25
+
+    # Lost: very long lapse + low activity
+    if r > c["r_lost"] and f <= c["f_low"]:
+        return "Lost"
+    # Hibernating: long lapse (regardless of past value)
+    if r > c["r_lapsing"]:
+        return "Hibernating"
+    # Can't Lose Them: was frequent + high value, now lapsing
+    if r > c["r_active"] and f >= c["f_cant_lose"] and high_m:
+        return "Can't Lose Them"
+    # At-Risk: lapsing with meaningful engagement history
+    if r > c["r_active"] and f >= c["f_active"]:
+        return "At-Risk"
+    # Champions: recent + highly frequent + high value
+    if r <= c["r_recent"] and f >= c["f_champion"] and high_m:
+        return "Champions"
+    # Loyal Customers: frequent + high value (less strict on recency)
+    if f >= c["f_loyal"] and high_m:
+        return "Loyal Customers"
+    # Potential Loyalist: recent + decent frequency → build habit
+    if r <= c["r_recent"] and f >= c["f_active"]:
+        return "Potential Loyalist"
+    # New Customers: very recent, low frequency
+    if r <= c["r_recent"] and f <= c["f_low"]:
+        return "New Customers"
+    # About to Sleep: mid recency, low frequency
+    if c["r_recent"] < r <= c["r_active"] and f <= c["f_low"]:
+        return "About to Sleep"
+    # Promising: recent but not yet high value
+    if r <= c["r_active"] and not low_m:
+        return "Promising"
+    return "Need Attention"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Internal Layer 1: RFM + K-Means
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_layer1(pos_file_path="data/raw_pos_transactions.csv"):
@@ -330,6 +416,21 @@ def _run_layer1(pos_file_path="data/raw_pos_transactions.csv"):
             best_score, best_k = score, k
     rfm['kmeans_cluster'] = KMeans(n_clusters=best_k, random_state=42, n_init=10).fit_predict(X)
     print(f"✅ [Layer 1 Valuation] K-Means cluster จริง: k={best_k} (Silhouette={best_score:.3f})")
+
+    # Stable per-customer segment label (never re-orders between runs)
+    _m_p25 = float(rfm['monetary'].quantile(0.25))
+    _m_p75 = float(rfm['monetary'].quantile(0.75))
+    _seg_cfg = CONFIG.get("rfm_segments", {})
+    rfm['rfm_segment'] = rfm.apply(
+        lambda row: _rfm_rule_segment(
+            float(row['recency']), int(row['frequency']), float(row['monetary']),
+            _m_p25, _m_p75, _seg_cfg,
+        ),
+        axis=1,
+    )
+    _seg_counts = rfm['rfm_segment'].value_counts()
+    print(f"🗂️  [Layer 1 RFM] segments: { {k: int(v) for k, v in _seg_counts.items()} }")
+
     os.makedirs("data/processed", exist_ok=True)
     rfm.to_csv("data/processed/layer1_dual_valuation.csv", index=False)
     return rfm
@@ -1161,7 +1262,10 @@ def decide_for_customers(model, ctx, customer_ids=None):
     temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
     temp_df['prob_control'] = model.predict_control_proba(cust_agg[features]).round(4)
     # rfm_decile_segment และ frequency มีใน cust_agg แล้ว — merge เฉพาะ columns ที่ยังขาด
-    rfm_extra = rfm_df[['customer_id', 'recency', 'monetary', 'kmeans_cluster']].drop_duplicates('customer_id')
+    _rfm_extra_cols = ['customer_id', 'recency', 'monetary', 'kmeans_cluster']
+    if 'rfm_segment' in rfm_df.columns:
+        _rfm_extra_cols.append('rfm_segment')
+    rfm_extra = rfm_df[_rfm_extra_cols].drop_duplicates('customer_id')
     temp_df = temp_df.merge(rfm_extra, on='customer_id', how='left')
 
     # Look up cluster-specific bundle and segment name from context maps
@@ -1188,7 +1292,8 @@ def decide_for_customers(model, ctx, customer_ids=None):
         r   = row.get('recency', 999)
         f   = row.get('frequency', 1)
         d   = row.get('rfm_decile_segment', 1)
-        seg = row.get('cluster_segment', '')
+        # Fallback order: cluster_segment_map result → rfm_segment (stable) → empty
+        seg = row.get('cluster_segment') or row.get('rfm_segment', '')
         ft  = row.get('freq_trend', 0)   # positive = rising, negative = declining
 
         if r > _cantlose_days and f >= _cantlose_freq and d >= _cantlose_rfm:
