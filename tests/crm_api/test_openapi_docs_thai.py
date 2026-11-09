@@ -16,6 +16,7 @@ EXPECTED_ROUTES = {
     ("post", "/v1/audience/export"), ("post", "/v1/content/generate"),
     ("post", "/v1/model/retrain"),
     ("post", "/v1/model/retrain-request"),
+    ("get", "/v1/model/retrain-request/{request_id}"),
     ("get", "/v1/segment/health"),
     ("get", "/v1/send-date/recommend"),
     # Phase 5 — Execution

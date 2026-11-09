@@ -205,10 +205,11 @@ ERR_RUNS_START = {409: {"description": "มีงานรันอยู่แ�
 # Phase 2 — ML Campaign, Segment Health, Content, Audience, Model endpoints
 # ---------------------------------------------------------------------------
 
-P_STORE_ID = "รหัสร้านค้า (store identifier) ที่ใช้จัดเก็บข้อมูลและประวัติแคมเปญ"
-P_PLAN_ID  = "รหัสแผนแคมเปญ (`plan_id`) ที่ได้จาก POST /campaign/plan"
-P_LIMIT_H  = "จำนวนรายการต่อหน้า (1–100) ค่าตั้งต้น 20"
-P_OFFSET   = "ข้ามกี่รายการ (สำหรับ pagination) ค่าตั้งต้น 0"
+P_STORE_ID   = "รหัสร้านค้า (store identifier) ที่ใช้จัดเก็บข้อมูลและประวัติแคมเปญ"
+P_PLAN_ID    = "รหัสแผนแคมเปญ (`plan_id`) ที่ได้จาก POST /campaign/plan"
+P_LIMIT_H    = "จำนวนรายการต่อหน้า (1–100) ค่าตั้งต้น 20"
+P_OFFSET     = "ข้ามกี่รายการ (สำหรับ pagination) ค่าตั้งต้น 0"
+P_REQUEST_ID = "รหัสคำขอ retrain (`request_id`) ที่ได้จาก POST /model/retrain-request"
 
 CAMPAIGN_PLAN = dict(
     tags=["ML แคมเปญ"], summary="สร้างแผนแคมเปญด้วย ML",
@@ -316,6 +317,19 @@ MODEL_RETRAIN_REQUEST = dict(
         "``auto`` (ระบบเลือกให้)"
     ),
     response_description="request_id และสถานะ queued",
+)
+
+MODEL_RETRAIN_REQUEST_STATUS = dict(
+    tags=["โมเดล"], summary="ตรวจสอบสถานะคำขอ retrain",
+    description=(
+        "คืนสถานะปัจจุบันของคำขอ retrain ที่ส่งผ่าน `POST /model/retrain-request`\n\n"
+        "สถานะที่เป็นไปได้:\n"
+        "- `queued` — รอ scheduler pickup\n"
+        "- `processing` — กำลัง retrain\n"
+        "- `completed` — retrain สำเร็จ\n"
+        "- `failed` — retrain ล้มเหลว (ดู field `error`)"
+    ),
+    response_description="สถานะคำขอ retrain",
 )
 
 MODEL_RETRAIN = dict(

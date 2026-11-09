@@ -128,11 +128,15 @@ def run_scheduler(
     else:
         _logger.info("Scheduler: %d/%d outcomes -- retrain check deferred", total_outcomes, min_out)
 
+    # Process any queued retrain requests submitted via API
+    queue_summary = process_retrain_queue(data_dir, dry_run=dry_run)
+
     return {
         "processed":         processed,
         "skipped":           skipped,
         "retrain_triggered": retrain_triggered,
         "outcomes":          captured_outcomes,
+        "retrain_queue":     queue_summary,
     }
 
 
@@ -371,6 +375,79 @@ def _resolve_config(data_dir: str) -> dict:
         }
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Retrain queue processor (API-submitted requests)
+# ---------------------------------------------------------------------------
+
+def process_retrain_queue(data_dir: str, dry_run: bool = False) -> dict:
+    """Process queued retrain requests submitted via POST /v1/model/retrain-request.
+
+    Transitions: queued → processing → completed | failed
+
+    Returns
+    -------
+    dict
+        ``{processed, failed, skipped}``
+    """
+    _add_src_to_path()
+    try:
+        from crm_api import store as _store
+    except ImportError:
+        _logger.warning("process_retrain_queue: crm_api.store not importable — skipping")
+        return {"processed": 0, "failed": 0, "skipped": 0}
+
+    queued = _store.get_retrain_requests(data_dir, status="queued", limit=50)
+    if not queued:
+        return {"processed": 0, "failed": 0, "skipped": 0}
+
+    _logger.info("process_retrain_queue: %d queued request(s)", len(queued))
+    processed = 0
+    failed = 0
+    skipped = 0
+    now = _utcnow()
+
+    for req in queued:
+        request_id = req.get("request_id")
+        if not request_id:
+            skipped += 1
+            continue
+
+        if dry_run:
+            _logger.info("process_retrain_queue [dry-run]: would process %s", request_id)
+            skipped += 1
+            continue
+
+        # Mark as processing
+        _store.update_retrain_request(data_dir, request_id, {
+            "status": "processing",
+            "processing_at": now.isoformat(),
+        })
+
+        try:
+            from retrain_trigger import assess_retrain
+            result = assess_retrain()
+            _store.update_retrain_request(data_dir, request_id, {
+                "status": "completed",
+                "completed_at": _utcnow().isoformat(),
+                "needs_retrain": result.get("needs_retrain", False),
+                "reasons": result.get("reasons", []),
+                "warnings": result.get("warnings", []),
+            })
+            processed += 1
+            _logger.info("process_retrain_queue: completed %s (needs_retrain=%s)",
+                         request_id, result.get("needs_retrain"))
+        except Exception as exc:
+            _store.update_retrain_request(data_dir, request_id, {
+                "status": "failed",
+                "failed_at": _utcnow().isoformat(),
+                "error": str(exc),
+            })
+            failed += 1
+            _logger.error("process_retrain_queue: failed %s -- %s", request_id, exc)
+
+    return {"processed": processed, "failed": failed, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
