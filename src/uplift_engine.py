@@ -12,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG, REGISTRY_PATH
+from action_rules import ACTION_KEYS as _ACTION_KEYS
 from peak_hours import write_peak_hours
 from atomic_io import atomic_write_text
 from model_registry import ModelRegistry, RegistryError
@@ -1123,7 +1124,7 @@ def classify_uplift_group(uplift: float, prob_control: float) -> str:
     return "persuadable"
 
 
-def build_action_menu(
+def _select_action(
     group: str,
     avg_spent: float,
     cogs: float,
@@ -1139,14 +1140,15 @@ def build_action_menu(
     bundle_name: str = "",
     rescue: bool = False,
     clv_at_risk: float = 0.0,
-) -> tuple[str, float, float, str]:
+) -> tuple[str, float, float, str, str | None]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
     who passed Step 1 (persuadable or sure_thing).
 
     Rules are defined declaratively in src/action_rules.py.
 
-    Returns (action, incremental_profit, promo_cost, send_window).
+    Returns (action, incremental_profit, promo_cost, send_window, rule_id); rule_id is the winning
+    rule's id (the stable action_key), None when no action is viable.
     incremental_profit = gross_margin × (p_treated − p_baseline) − promo_cost
     for all promo types — consistent formula for ROI comparisons.
 
@@ -1223,25 +1225,30 @@ def build_action_menu(
                 ok, profit, promo_cost = _viable_loyalty(rule["rate_key"])
                 if ok:
                     action = rule["action"].format(bundle=bundle_name)
-                    return action, profit, promo_cost, send_window
-        return "", baseline_profit, 0.0, time_context
+                    return action, profit, promo_cost, send_window, rule["id"]
+        return "", baseline_profit, 0.0, time_context, None
 
     # ── Persuadables: collect all viable, return max profit ──────────────────
     # rescue=True (churn_risk / cant_lose / hibernating / about_to_sleep with mildly negative
     # uplift): goal is relationship retention — use CLV-informed viability check.
     viable_fn = _viable_clv if rescue else _viable
-    candidates: list[tuple[str, float, float, str]] = []
+    candidates: list[tuple[str, float, float, str, str]] = []
     for rule in PERSUADABLE_RULES:
         if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
             ok, profit, promo_cost = viable_fn(rule["rate_key"])
             if ok:
                 action = rule["action"].format(bundle=bundle_name)
-                candidates.append((action, profit, promo_cost, send_window))
+                candidates.append((action, profit, promo_cost, send_window, rule["id"]))
 
     if candidates:
         return max(candidates, key=lambda x: x[1])
 
-    return "", baseline_profit, 0.0, time_context
+    return "", baseline_profit, 0.0, time_context, None
+
+
+def build_action_menu(*args, **kwargs) -> tuple[str, float, float, str]:
+    """(action, incremental_profit, promo_cost, send_window) — see _select_action for the arguments."""
+    return _select_action(*args, **kwargs)[:4]
 
 
 def decide_for_customers(model, ctx, customer_ids=None):
@@ -1256,7 +1263,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
         cust_agg = cust_agg[cust_agg['customer_id'].isin(customer_ids)]
     temp_df = cust_agg.copy()
     if len(temp_df) == 0:
-        for _c in ('recommended_action', 'expected_profit', 'guardrail_blocked', 'send_window', 'should_send'):
+        for _c in ('recommended_action', 'action_key', 'expected_profit', 'guardrail_blocked', 'send_window', 'should_send'):
             temp_df[_c] = pd.Series(dtype=object)
         return 0.0, temp_df
     temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
@@ -1367,10 +1374,10 @@ def decide_for_customers(model, ctx, customer_ids=None):
         p_treated       = max(0.0, min(1.0, prob_c + float(row['uplift_score'])))
         baseline_profit = round(gross_margin * p_baseline, 2)
 
-        def _s(action, profit, promo_cost, window, group="hard_stop", reason="hard_stop"):
-            """Build consistent 10-element Series for all return paths."""
+        def _s(action, profit, promo_cost, window, group="hard_stop", reason="hard_stop", key=None):
+            """Build consistent 11-element Series for all return paths (last = action_key)."""
             return pd.Series([action, profit, 0, window, promo_cost, group, reason,
-                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), key])
 
         # ── Step 1: Hard stops ────────────────────────────────────────────────
         if pd.isna(in_stock) or not in_stock:
@@ -1387,36 +1394,36 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 p_mile   = max(0.0, min(1.0, prob_c + uplift * 0.5))
                 if m_margin * (p_mile - p_baseline) - m_cost > 0:
                     m_profit = round(m_margin * (p_mile - p_baseline) - m_cost, 2)
-                    return _s(f"Milestone Reward: สั่งครบ {m_basket:.0f} บาท รับ {m_pts} แต้ม",
-                              m_profit, round(m_cost, 2), time_context, "sure_thing", "sent")
+                    return _s(_ACTION_KEYS["low_milestone"]["action"].format(basket=m_basket, pts=m_pts),
+                              m_profit, round(m_cost, 2), time_context, "sure_thing", "sent", key="low_milestone")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "new_customer":
                 w_cost   = avg_spent * CONFIG["promo_cost_rates"]["new_customer_welcome"]
                 w_profit = round(gross_margin * (p_treated - p_baseline) - w_cost, 2)
                 if w_profit > 0:
-                    return _s("Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%", w_profit, round(w_cost, 2), time_context, "sure_thing", "sent")
+                    return _s(_ACTION_KEYS["low_welcome"]["action"], w_profit, round(w_cost, 2), time_context, "sure_thing", "sent", key="low_welcome")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "about_to_sleep":
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["standard"]
                 r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return _s("เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                    return _s(_ACTION_KEYS["low_abouttosleep_miss_you"]["action"], r_profit, round(r_cost, 2), time_context, "persuadable", "sent", key="low_abouttosleep_miss_you")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier == "hibernating":
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["bundle_upsell_low"]
                 r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return _s("Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                    return _s(_ACTION_KEYS["low_hibernating_nudge"]["action"], r_profit, round(r_cost, 2), time_context, "persuadable", "sent", key="low_hibernating_nudge")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             elif tier in ("churn_risk", "cant_lose"):
                 r_cost   = avg_spent * CONFIG["promo_cost_rates"]["churn_rescue"]
                 r_profit = round(gross_margin * (p_treated - p_baseline) - r_cost, 2)
                 if r_profit > 0:
-                    return _s("Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ", r_profit, round(r_cost, 2), time_context, "persuadable", "sent")
+                    return _s(_ACTION_KEYS["low_churn_winback"]["action"], r_profit, round(r_cost, 2), time_context, "persuadable", "sent", key="low_churn_winback")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
             else:
@@ -1426,7 +1433,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 p_upsell      = max(0.0, min(1.0, prob_c + uplift * 0.4))
                 if bundle_margin * (p_upsell - p_baseline) - bundle_cost > 0 and cluster_bundle and not cluster_bundle.startswith("เซตคู่คุ้มค่า"):
                     upsell_profit = round(bundle_margin * (p_upsell - p_baseline) - bundle_cost, 2)
-                    return _s(f"Bundle Upsell: เพิ่ม {cluster_bundle}", upsell_profit, round(bundle_cost, 2), time_context, "persuadable", "sent")
+                    return _s(_ACTION_KEYS["low_bundle_upsell"]["action"].format(bundle=cluster_bundle), upsell_profit, round(bundle_cost, 2), time_context, "persuadable", "sent", key="low_bundle_upsell")
                 return _s("Do Nothing (Low Basket Size)", baseline_profit, 0.0, time_context, reason="low_basket")
 
         # ── Step 1: Uplift group classification ───────────────────────────────
@@ -1448,14 +1455,14 @@ def decide_for_customers(model, ctx, customer_ids=None):
             else:
                 return pd.Series(["Do Nothing (Do Not Disturb)", baseline_profit, 0,
                                    time_context, 0.0, group, "do_not_disturb: negative uplift",
-                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), None])
         if group == "lost_cause":
             return pd.Series(["Do Nothing (Lost Cause)", baseline_profit, 0,
                                time_context, 0.0, group, "lost_cause: uplift below threshold",
-                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), None])
 
         # ── Step 2: Action menu (pre-validated profitable actions only) ───────
-        action, profit, promo_cost, send_window = build_action_menu(
+        action, profit, promo_cost, send_window, action_key = _select_action(
             group=group, avg_spent=avg_spent, cogs=cogs,
             uplift=uplift, prob_control=prob_c,
             rfm_seg=rfm_seg, is_spike=is_spike,
@@ -1476,13 +1483,13 @@ def decide_for_customers(model, ctx, customer_ids=None):
             if rfm_seg >= _zc_rfm and tier in _zc_tiers and uplift >= _rescue_guard:
                 return pd.Series(["Zero-Cost: เราคิดถึงคุณ — ขอบคุณที่เป็นลูกค้าที่ดีของเรา",
                                    baseline_profit, 0, time_context, 0.0, group, "zero_cost_eligible",
-                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                                   round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), None])
             return pd.Series(["Do Nothing (No Profitable Action)", baseline_profit, 0,
                                time_context, 0.0, group, "no_profitable_action",
-                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                               round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), None])
 
         return pd.Series([action, profit, 0, send_window, promo_cost, group, "sent",
-                          round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4)])
+                          round(gross_margin, 2), round(p_baseline, 4), round(p_treated, 4), action_key])
 
     res = temp_df.apply(calculate_action_and_profit, axis=1)
     temp_df['recommended_action'] = res[0]
@@ -1496,6 +1503,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
     temp_df['gross_margin']       = res[7]
     temp_df['p_baseline']         = res[8]
     temp_df['p_treated']          = res[9]
+    temp_df['action_key']         = res[10]   # stable id of the rule behind the action (None for Do Nothing)
     temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
     temp_df['should_send'] = (
         (temp_df['guardrail_blocked'] == 0) &

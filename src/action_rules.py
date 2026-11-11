@@ -552,6 +552,68 @@ PERSUADABLE_RULES = [
 ]
 
 
+# ─── Low-basket rules ────────────────────────────────────────────────────────
+# Actions the engine picks directly for customers whose average basket is below
+# CONFIG["low_basket_threshold"] (uplift_engine.calculate_action_and_profit).  They are not
+# matched through matches()/menus — they exist here so every action has a stable id and an offer.
+# The offer's size follows the cost rate the engine charges for the action (rate_key).
+
+LOW_BASKET_RULES = [
+    {
+        "id":       "low_milestone",
+        "tiers":    ["champions"],
+        "rate_key": "milestone_reward",
+        "action":   "Milestone Reward: สั่งครบ {basket:.0f} บาท รับ {pts} แต้ม",
+        # points and the basket target come from CONFIG at call time (never a copy)
+        "dotdash_offer_fn": lambda: {"offer_type": "points",
+                                     "points_amount": _CONFIG["milestone_points"],
+                                     "min_spend": _CONFIG["milestone_basket"], "expiry_days": 30},
+    },
+    {
+        "id":       "low_welcome",
+        "tiers":    ["new_customer"],
+        "rate_key": "new_customer_welcome",
+        "action":   "Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30},
+    },
+    {
+        "id":       "low_abouttosleep_miss_you",
+        "tiers":    ["about_to_sleep"],
+        "rate_key": "standard",
+        "action":   "เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_hibernating_nudge",
+        "tiers":    ["hibernating"],
+        "rate_key": "bundle_upsell_low",
+        "action":   "Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 3.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_churn_winback",
+        "tiers":    ["churn_risk", "cant_lose"],
+        "rate_key": "churn_rescue",
+        "action":   "Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 12.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_bundle_upsell",
+        "rate_key": "bundle_upsell_low",
+        "action":   "Bundle Upsell: เพิ่ม {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 3.0, "min_spend": 0, "expiry_days": 30},
+    },
+]
+
+# Stable action_key -> rule.  The key is the rule id: names may change, keys never do.
+ACTION_KEYS = {r["id"]: r for r in SURE_THING_RULES + PERSUADABLE_RULES + LOW_BASKET_RULES}
+
+
 # ---------------------------------------------------------------------------
 # DotDash offer helper
 # ---------------------------------------------------------------------------
@@ -570,7 +632,8 @@ def get_dotdash_offer(rule: dict) -> dict:
         ``{offer_type, points_amount?, coupon_type?, coupon_value?,
            min_spend, expiry_days}``
     """
-    offer = dict(rule.get("dotdash_offer") or {})
+    fn = rule.get("dotdash_offer_fn")
+    offer = dict(fn() if fn else (rule.get("dotdash_offer") or {}))
     if not offer:
         # Fallback: infer from rate_key
         rk = rule.get("rate_key", "")
@@ -584,8 +647,8 @@ def get_dotdash_offer(rule: dict) -> dict:
 
 
 def get_dotdash_offer_by_id(rule_id: str) -> dict:
-    """Look up a rule by id across both rule lists and return its DotDash offer."""
-    for rule in SURE_THING_RULES + PERSUADABLE_RULES:
-        if rule.get("id") == rule_id:
-            return get_dotdash_offer(rule)
+    """Look up a rule by id (any rule list) and return its DotDash offer."""
+    rule = ACTION_KEYS.get(rule_id)
+    if rule is not None:
+        return get_dotdash_offer(rule)
     return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
