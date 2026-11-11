@@ -762,6 +762,10 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
         seg["suppressed_count"]   = sup_count
         seg["suppression_rate"]   = sup_rate
         seg["l4_action_breakdown"] = action_counts
+        # same counts keyed by the stable action_key ('none' = Do Nothing / Zero-Cost) — additive field
+        seg["l4_action_key_breakdown"] = (
+            seg_df['action_key'].astype(object).where(seg_df['action_key'].notna(), 'none').value_counts().to_dict()
+            if 'action_key' in seg_df.columns else None)
         seg["l4_available"]       = True
 
         # Override projected profit with Layer 4's more accurate estimate

@@ -115,7 +115,9 @@ SEGMENTS = dict(
     tags=["แผนแคมเปญ"], summary="กลุ่มลูกค้า (Segment) ของแผน",
     description=("กลุ่มลูกค้าที่ pipeline แบ่งไว้ พร้อมขนาดกลุ่ม จำนวนที่ส่ง/ไม่ส่ง โปรที่แนะนำ "
                  "การตัดสินใจของ Layer 4 ต่อกลุ่ม และ unit economics\n\n"
-                 "ถ้ายังไม่มีไฟล์กลุ่มลูกค้าของเดือนนั้น จะตอบ `segments: null` พร้อมเหตุผลใน `reason` (ไม่ใช่ error)"),
+                 "ถ้ายังไม่มีไฟล์กลุ่มลูกค้าของเดือนนั้น จะตอบ `segments: null` พร้อมเหตุผลใน `reason` (ไม่ใช่ error)\n\n"
+                 "`action_breakdown` นับตามชื่อ action ส่วน `action_key_breakdown` นับตาม `action_key` ที่คงที่ "
+                 "(`none` = ไม่ส่ง) ควรจับคู่ด้วย key เพราะชื่อ action เปลี่ยนได้ ตารางชื่อ ↔ key อยู่ที่ `docs/dotdash-action-keys.md`"),
     response_description="รายการกลุ่มลูกค้า (มี header `ETag`)",
 )
 PROMOTIONS = dict(

@@ -44,6 +44,7 @@ def write_segments_latest(payload: dict, out_dir: str = "data/processed") -> str
             "suppressed": seg.get("suppressed_count"),
             "recommended_promo": seg.get("recommended_promo"),
             "action_breakdown": seg.get("l4_action_breakdown"),
+            "action_key_breakdown": seg.get("l4_action_key_breakdown"),
             "unit_economics": {
                 "net_profit_per_head": _get(ue, "net_profit_per_head"),
                 "total_projected_profit": _get(ue, "total_projected_profit"),
