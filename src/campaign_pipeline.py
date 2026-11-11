@@ -701,6 +701,42 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
     return payload, product_cogs, estimated_cogs
 
 
+_NEW_OUTPUT_COLUMNS = ["action_key", "cost_source"]
+
+
+def _reconcile_promo_advisor(detail):
+    """The Promo Advisor may replace the engine's action with the shop's own promo; keep action_key and
+    cost_source truthful: operator promo -> 'operator_promo'/'operator'; nothing to send -> none."""
+    if "final_source" not in detail.columns or "action_key" not in detail.columns:
+        return detail
+    detail = detail.copy()
+    op = detail["final_source"] == "operator"
+    detail.loc[op, "action_key"] = "operator_promo"
+    detail.loc[op, "cost_source"] = "operator"
+    none = detail["final_source"] == "none"
+    detail.loc[none, "action_key"] = None
+    detail.loc[none, "cost_source"] = "none"
+    return detail
+
+
+def _new_columns_last(detail):
+    """Existing output columns keep their names and order; the new ones go at the very end."""
+    last = [c for c in _NEW_OUTPUT_COLUMNS if c in detail.columns]
+    return detail[[c for c in detail.columns if c not in last] + last]
+
+
+def _layer4_view(detail):
+    """The per-customer columns Layer 4 hands to merge_layer4_into_payload (broadcast list, segments)."""
+    keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
+                 'guardrail_blocked', 'should_send', 'send_window']
+    if 'cluster' in detail.columns:
+        keep_cols.insert(1, 'cluster')
+    if 'treatment_type' in detail.columns:
+        keep_cols.append('treatment_type')
+    keep_cols += [c for c in _NEW_OUTPUT_COLUMNS if c in detail.columns]
+    return detail[keep_cols]
+
+
 def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
     """
     Merge Layer 4 per-customer uplift decisions into segment plan.
@@ -798,6 +834,8 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
                 "send_time_hint":      send_time,
                 "channel":             "Email/SMS",
                 "should_send":         1,
+                "action_key":          row.get("action_key"),
+                "cost_source":         row.get("cost_source"),
             })
 
         updated_segments.append(seg)
@@ -957,6 +995,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
         except Exception as _pa_exc:
             print(f"⚠️  [PromoAdvisor] ข้ามเพราะ: {_pa_exc}")
 
+    detail = _reconcile_promo_advisor(detail)
     total_cust = len(detail)
     print(f"\n🎯 การตัดสินใจ Layer 4 ({total_cust:,} ลูกค้า) โดย Champion {ref.version} [{ref.provenance}]:")
     for action, cnt in detail['recommended_action'].value_counts().items():
@@ -965,6 +1004,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
     print("-------------------------------------------------------")
 
     os.makedirs("data/processed", exist_ok=True)
+    detail = _new_columns_last(detail)
     detail.to_csv("data/processed/final_campaign_engine_output.csv", index=False)
     atomic_write_text("data/processed/model_used.json", json.dumps(
         {"champion_version": ref.version, "sha256": ref.sha256, "provenance": ref.provenance}, indent=2))
@@ -1035,13 +1075,7 @@ def run_layer4(pos_file_path="data/transactions.csv",
     except Exception as _e:
         log("L4", "business_monitor_error", error=str(_e), level="WARN")
 
-    keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
-                 'guardrail_blocked', 'should_send', 'send_window']
-    if 'cluster' in detail.columns:
-        keep_cols.insert(1, 'cluster')
-    if 'treatment_type' in detail.columns:
-        keep_cols.append('treatment_type')
-    return detail[keep_cols]
+    return _layer4_view(detail)
 
 
 # ==========================================
@@ -1186,6 +1220,7 @@ if __name__ == "__main__":
         print("-------------------------------------------------------")
 
         os.makedirs("data/processed", exist_ok=True)
+        detail = _new_columns_last(detail)
         detail.to_csv("data/processed/final_campaign_engine_output.csv", index=False)
         if not _use_rule_based:
             atomic_write_text("data/processed/model_used.json", json.dumps(
@@ -1252,13 +1287,7 @@ if __name__ == "__main__":
             except Exception as _e:
                 log("L4", "shadow_run_error", error=str(_e), level="WARN")
 
-        keep_cols = ['customer_id', 'recommended_action', 'expected_profit',
-                     'guardrail_blocked', 'should_send', 'send_window']
-        if 'cluster' in detail.columns:
-            keep_cols.insert(1, 'cluster')
-        if 'treatment_type' in detail.columns:
-            keep_cols.append('treatment_type')
-        layer4_df = detail[keep_cols]
+        layer4_df = _layer4_view(detail)
         # ── End Layer 4 Serving ───────────────────────────────────────────────
 
         _l4_rows = len(layer4_df) if layer4_df is not None else 0

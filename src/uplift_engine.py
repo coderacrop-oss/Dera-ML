@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
 from business_config import CONFIG, REGISTRY_PATH
-from action_rules import ACTION_KEYS as _ACTION_KEYS
+from action_rules import ACTION_KEYS as _ACTION_KEYS, get_dotdash_offer as _get_dotdash_offer
 from peak_hours import write_peak_hours
 from atomic_io import atomic_write_text
 from model_registry import ModelRegistry, RegistryError
@@ -1272,7 +1272,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
         cust_agg = cust_agg[cust_agg['customer_id'].isin(customer_ids)]
     temp_df = cust_agg.copy()
     if len(temp_df) == 0:
-        for _c in ('recommended_action', 'action_key', 'expected_profit', 'guardrail_blocked', 'send_window', 'should_send'):
+        for _c in ('recommended_action', 'action_key', 'cost_source', 'expected_profit', 'guardrail_blocked', 'send_window', 'should_send'):
             temp_df[_c] = pd.Series(dtype=object)
         return 0.0, temp_df
     temp_df['uplift_score'] = model.predict_uplift(cust_agg[features]).round(4)
@@ -1516,6 +1516,11 @@ def decide_for_customers(model, ctx, customer_ids=None):
     temp_df['p_baseline']         = res[8]
     temp_df['p_treated']          = res[9]
     temp_df['action_key']         = res[10]   # stable id of the rule behind the action (None for Do Nothing)
+    # where promo_cost comes from: estimated (rate x basket) | shop_provided (points priced from the shop's
+    # point value) | none (no promotion).  The Promo Advisor later marks operator promos 'operator'.
+    _points_keys = {k for k, r in _ACTION_KEYS.items() if _get_dotdash_offer(r)['offer_type'] == 'points'}
+    temp_df['cost_source'] = temp_df['action_key'].map(
+        lambda k: 'none' if pd.isna(k) else ('shop_provided' if _ppc is not None and k in _points_keys else 'estimated'))
     temp_df = temp_df.sort_values(by='expected_profit', ascending=False).reset_index(drop=True)
     temp_df['should_send'] = (
         (temp_df['guardrail_blocked'] == 0) &
