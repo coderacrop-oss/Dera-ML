@@ -83,3 +83,14 @@ def test_segments_latest_exports_action_key_breakdown_next_to_the_old_field(tmp_
     s0, s1 = json.load(open(write_segments_latest(payload, str(tmp_path)), encoding="utf-8"))["segments"]
     assert s0["action_breakdown"] == {"A": 3} and s0["action_key_breakdown"] == {"k": 3}
     assert s1["action_key_breakdown"] is None
+
+
+def test_doc_lists_every_action_group_exactly_as_the_code_has_it():
+    from action_rules import ACTION_GROUPS, ACTION_GROUP_VALUES
+    listed = {}
+    for line in open(TABLE, encoding="utf-8"):
+        m = re.match(r"^- \*\*([a-z_]+)\*\*: (.*)$", line.rstrip("\n"))
+        if m:
+            listed[m.group(1)] = sorted(k.strip("` ") for k in m.group(2).split(",") if k.strip())
+    expected = {g: sorted(k for k, v in ACTION_GROUPS.items() if v == g) for g in ACTION_GROUP_VALUES}
+    assert listed == {g: ks for g, ks in expected.items() if ks}

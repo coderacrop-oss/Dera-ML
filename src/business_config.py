@@ -144,3 +144,7 @@ CONFIG = {
     "stock_forecast_weeks":   4,      # default number of weeks to forecast ahead
     "stock_min_history_days": 14,     # minimum days of item history required to forecast
 }
+
+# Version of the output formats (final_campaign_engine_output.csv, broadcast_list.csv, dotdash_segments,
+# segments_latest.json). Bump when any existing field changes meaning or is removed; adding fields does not bump it.
+OUTPUT_SCHEMA_VERSION = "1"

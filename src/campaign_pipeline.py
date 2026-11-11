@@ -701,7 +701,7 @@ def layer3_and_4_processing(segments, df_raw, df_rfm):
     return payload, product_cogs, estimated_cogs
 
 
-_NEW_OUTPUT_COLUMNS = ["action_key", "cost_source"]
+_NEW_OUTPUT_COLUMNS = ["action_key", "cost_source", "action_group", "profit_basis", "schema_version"]
 
 
 def _reconcile_promo_advisor(detail):
@@ -713,14 +713,21 @@ def _reconcile_promo_advisor(detail):
     op = detail["final_source"] == "operator"
     detail.loc[op, "action_key"] = "operator_promo"
     detail.loc[op, "cost_source"] = "operator"
+    detail.loc[op, "action_group"] = "other"
+    detail.loc[op, "profit_basis"] = None
     none = detail["final_source"] == "none"
     detail.loc[none, "action_key"] = None
     detail.loc[none, "cost_source"] = "none"
+    detail.loc[none, "action_group"] = None
+    detail.loc[none, "profit_basis"] = None
     return detail
 
 
 def _new_columns_last(detail):
     """Existing output columns keep their names and order; the new ones go at the very end."""
+    from business_config import OUTPUT_SCHEMA_VERSION
+    if "schema_version" not in detail.columns:
+        detail = detail.assign(schema_version=OUTPUT_SCHEMA_VERSION)
     last = [c for c in _NEW_OUTPUT_COLUMNS if c in detail.columns]
     return detail[[c for c in detail.columns if c not in last] + last]
 
@@ -836,6 +843,9 @@ def merge_layer4_into_payload(payload: dict, layer4_df, df_rfm) -> dict:
                 "should_send":         1,
                 "action_key":          row.get("action_key"),
                 "cost_source":         row.get("cost_source"),
+                "action_group":        row.get("action_group"),
+                "profit_basis":        row.get("profit_basis"),
+                "schema_version":      row.get("schema_version"),
             })
 
         updated_segments.append(seg)

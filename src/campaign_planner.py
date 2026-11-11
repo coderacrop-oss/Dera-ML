@@ -29,7 +29,7 @@ from model_registry import ModelRegistry, RegistryError
 from ingest import detect_source, ingest_meripos, quality_gate
 from store_intelligence import build_store_profile, get_store_embedding
 from bundle_pairs import group_bundle, personal_pairs
-from business_config import CONFIG
+from business_config import CONFIG, OUTPUT_SCHEMA_VERSION
 from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer, infer_dotdash_offer
 
 
@@ -367,6 +367,7 @@ def run(
 
     report = {
         # Meta
+        "schema_version":   OUTPUT_SCHEMA_VERSION,
         "mode":             mode,
         "goal":             goal,
         "goal_label":       _GOAL_LABELS[goal],

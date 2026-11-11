@@ -16,6 +16,7 @@ from promo_advisor import PromoSpec
 META = {"approved_by": "t", "approved_at": "x", "provenance": "proxy-labels", "metrics": None, "created_at": "x"}
 BASELINE_COLS = json.load(open(os.path.join(os.path.dirname(__file__), "golden", "final_output_columns_v0.json")))
 OUT = "data/processed/final_campaign_engine_output.csv"
+NEW = ["action_key", "cost_source", "action_group", "profit_basis", "schema_version"]
 
 
 @pytest.fixture
@@ -36,7 +37,7 @@ def _run(env, **kw):
 
 def test_old_columns_keep_their_names_and_order_and_new_ones_come_last(env):
     _ret, out = _run(env)
-    assert list(out.columns) == BASELINE_COLS + ["action_key", "cost_source"]
+    assert list(out.columns) == BASELINE_COLS + NEW
 
 
 def test_action_key_matches_the_action_written_on_the_same_row(env):
@@ -75,7 +76,7 @@ def test_operator_promo_replaces_the_key_and_the_cost_source(env):
     assert ml["action_key"].isin(list(ACTION_KEYS)).all() and (ml["cost_source"] == "estimated").all()
     none = out[out["final_source"] == "none"]
     assert none["action_key"].isna().all() and (none["cost_source"] == "none").all()
-    assert list(out.columns)[-2:] == ["action_key", "cost_source"]
+    assert list(out.columns)[-len(NEW):] == NEW
 
 
 def test_broadcast_list_carries_the_new_columns_after_the_old_ones(env):
@@ -86,7 +87,7 @@ def test_broadcast_list_carries_the_new_columns_after_the_old_ones(env):
     layer4 = layer4.rename(columns={"kmeans_cluster": "cluster"})
     cp.merge_layer4_into_payload(payload, layer4, None)
     b = pd.read_csv("data/processed/broadcast_list.csv")
-    assert list(b.columns)[-2:] == ["action_key", "cost_source"]
+    assert list(b.columns)[-len(NEW):] == NEW
     assert list(b.columns)[:11] == ["customer_id", "segment_name", "recommended_action", "offer", "expected_profit",
                                     "promo_cost", "send_date", "send_window", "send_time_hint", "channel", "should_send"]
     assert b["action_key"].isin(list(ACTION_KEYS) + ["operator_promo"]).all()
@@ -97,10 +98,11 @@ def test_layer4_view_hands_the_new_columns_to_the_payload_merge():
     detail = pd.DataFrame({"customer_id": ["a"], "cluster": [0], "recommended_action": ["x"], "expected_profit": [1.0],
                            "guardrail_blocked": [0], "should_send": [1], "send_window": ["Peak Window"],
                            "treatment_type": ["none"], "action_key": ["st_loyalty_nurture"], "cost_source": ["estimated"],
-                           "unrelated": [9]})
+                           "action_group": ["loyalty_reward"], "profit_basis": ["sure_thing_loyalty"],
+                           "schema_version": ["1"], "unrelated": [9]})
     view = cp._layer4_view(detail)
     assert list(view.columns) == ["customer_id", "cluster", "recommended_action", "expected_profit", "guardrail_blocked",
-                                  "should_send", "send_window", "treatment_type", "action_key", "cost_source"]
+                                  "should_send", "send_window", "treatment_type"] + NEW
 
 
 def test_both_run_layer4_and_the_cli_main_build_the_view_with_the_same_helper():

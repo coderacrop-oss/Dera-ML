@@ -112,3 +112,15 @@
 | `low_hibernating_nudge` | คูปอง 3% | 14 |
 | `low_churn_winback` | คูปอง 12% | 14 |
 | `low_bundle_upsell` | คูปอง 3% | 30 |
+
+## หมวดของ action (`action_group`)
+
+ใช้แยกประเภท action แทนการจับ regex จากชื่อ (ส่งมาใน `dotdash_offer.action_group` และคอลัมน์ `action_group` ของ CSV) ค่าที่เป็นไปได้: `win_back`, `retain`, `loyalty_reward`, `onboarding`, `upsell`, `other` — เพิ่มค่าใหม่ได้ ค่าเดิมไม่เปลี่ยนความหมาย; `operator_promo` (โปรของร้าน) อยู่หมวด `other`; ไม่มีโปร = ว่าง
+
+> การจัดหมวดด้านล่างเป็นข้อเสนอของทีม ML จากชื่อ/ชั้นลูกค้าของแต่ละ action ขอให้ Dera ตรวจ
+
+- **win_back**: `st_cantlose_winback`, `churnrisk_rescue_bundle`, `churnrisk_offpeak_traffic`, `cantlose_vip_winback`, `cantlose_aggressive_offpeak`, `low_churn_winback`, `hiber_reactivation_deep`, `hiber_reactivation_traffic`, `low_hibernating_nudge`, `aboutsleep_urgent`, `aboutsleep_traffic_driver`, `low_abouttosleep_miss_you`
+- **retain**: `loyal_standard`, `promising_reengage`, `promising_offpeak`, `needattn_bundle`, `needattn_offpeak_traffic`, `atrisk_discount_bundle`, `atrisk_standard_offpeak`, `atrisk_standard_peak`, `atrisk_offpeak_traffic`, `mid_festival_guard`, `mid_offpeak_traffic`, `mid_standard_peak`, `mid_standard_offpeak`
+- **loyalty_reward**: `st_vip_reward_offpeak`, `st_vip_early_access_peak`, `st_loyalty_nurture`, `loyal_vip_bundle`, `loyal_vip_reward`, `potloyal_habit_builder`, `potloyal_offpeak_vip`, `champ_vip_bundle`, `champ_early_access_peak`, `champ_early_access_offpeak`, `champ_vip_reward`, `mid_offpeak_vip_points`, `mid_vip_reward_peak`, `mid_vip_reward_offpeak`, `mid_vip_early_access_peak`, `mid_vip_early_access_offpeak`, `low_milestone`
+- **onboarding**: `st_newcust_welcome`, `newcust_welcome_peak`, `newcust_welcome_offpeak`, `low_welcome`
+- **upsell**: `mid_bundle_upsell_peak`, `mid_bundle_upsell_offpeak`, `low_bundle_upsell`

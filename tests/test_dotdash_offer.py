@@ -35,7 +35,8 @@ def test_key_wins_over_whatever_the_action_text_says():
 @pytest.mark.parametrize("text", ["Do Nothing (Lost Cause)", "Zero-Cost: เราคิดถึงคุณ", ""])
 def test_no_key_and_no_promotion_is_a_zero_point_offer(text):
     assert infer_dotdash_offer(None, text) == {"offer_type": "points", "points_amount": 0,
-                                                "min_spend": 0, "expiry_days": 0, "action_key": None}
+                                                "min_spend": 0, "expiry_days": 0, "action_key": None,
+                                                "action_group": None}
 
 
 def test_legacy_text_path_still_answers_but_warns(caplog):

@@ -178,6 +178,7 @@ def campaign_plan(body: PlanRequest, request: Request, _: None = Depends(require
     generated_at = _now_iso()
 
     response = {
+        "schema_version": report.get("schema_version"),
         "plan_id":       plan_id,
         "store_id":      body.store_id,
         "generated_at":  generated_at,
