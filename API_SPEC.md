@@ -94,14 +94,44 @@ X-API-Key: <key>
   },
   "dotdash_segments": [
     {
-      "segment_name": "At-Risk",
-      "customer_count": 95,
-      "action": "Win-Back: ส่วนลด 15%",
-      "offer": "ส่วนลด 15%",
-      "expected_profit": 4200.00,
-      "cost": 850.00,
-      "send_date": "2026-11-15",
-      "wave": 1
+      "segment_name": "Potential Loyalist",
+      "action_key": "potloyal_habit_builder",
+      "recommended_action": "Habit Builder: สะสมแต้ม เพิ่มความถี่",
+      "customer_count": 76,
+      "customer_ids": [
+        "c095",
+        "c060",
+        "..."
+      ],
+      "expected_profit": 20.67,
+      "actual_spend": 16.5,
+      "dotdash_offer": {
+        "offer_type": "points",
+        "points_amount": 60,
+        "min_spend": 0,
+        "expiry_days": 30,
+        "action_key": "potloyal_habit_builder"
+      }
+    },
+    {
+      "segment_name": "Champions",
+      "action_key": "champ_vip_bundle",
+      "recommended_action": "VIP Bundle: เซตคู่คุ้มค่า (Bundle)",
+      "customer_count": 31,
+      "customer_ids": [
+        "c041",
+        "c098",
+        "..."
+      ],
+      "expected_profit": 9.8,
+      "actual_spend": 7.81,
+      "dotdash_offer": {
+        "offer_type": "points",
+        "points_amount": 150,
+        "min_spend": 0,
+        "expiry_days": 30,
+        "action_key": "champ_vip_bundle"
+      }
     }
   ]
 }
@@ -109,7 +139,7 @@ X-API-Key: <key>
 
 | Field | Description |
 |-------|-------------|
-| `dotdash_segments` | array — per-segment detail สำหรับ DotDash display: segment_name, customer_count, action, offer, expected_profit, cost, send_date, wave |
+| `dotdash_segments` | array — **1 กลุ่ม = 1 ของรางวัล**: แบ่งตาม (segment_name, action_key) ลูกค้าในกลุ่มได้ `dotdash_offer` เดียวกันทั้งหมด. ฟิลด์: `segment_name`, `action_key` (id เสถียรของกฎ ใช้จับคู่แทนชื่อ action), `recommended_action` (ข้อความที่พบบ่อยในกลุ่ม แสดงผลเท่านั้น), `customer_count`, `customer_ids`, `expected_profit`, `actual_spend`, `dotdash_offer` (`offer_type`, `points_amount` หรือ `coupon_type`+`coupon_value`, `min_spend`, `expiry_days`, `action_key`). ตัวอย่างข้างบนมาจากการรันจริงบนข้อมูลทดสอบ (fixture) ตัดรายชื่อลูกค้าให้สั้น |
 
 #### Response 400
 

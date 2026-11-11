@@ -195,40 +195,43 @@ def _infer_dotdash_offer(action: str) -> dict:
 
 
 def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:
-    """Return per-segment DotDash draft campaign specs from the selected customer frame.
+    """Return DotDash draft-campaign specs: ONE GROUP PER (segment, action_key).
 
-    Each entry tells DotDash exactly what to create:
-      - segment_name, customer_count, customer_ids
-      - recommended_action (most common in segment)
-      - expected_profit, actual_spend
-      - dotdash_offer: {offer_type, points_amount?, coupon_type?, coupon_value?,
-                        min_spend, expiry_days}
+    DotDash creates one campaign per group with one reward, so a segment whose customers were
+    given different actions is split — every customer is in the group whose offer they were given.
+    Each entry: segment_name, action_key, recommended_action (most common text in the group),
+    customer_count, customer_ids, expected_profit, actual_spend, dotdash_offer (incl. action_key).
+    Rows without an action_key (data from before it existed) are grouped by action text and their
+    offer is inferred from that text (legacy, logged).
     """
     if selected.empty or "segment_name" not in selected.columns:
         return []
 
+    df = selected.copy()
+    if "action_key" not in df.columns:
+        df["action_key"] = None
+    if "recommended_action" not in df.columns:
+        df["recommended_action"] = ""
+    df["action_key"] = df["action_key"].astype(object).where(df["action_key"].notna(), None)
+    # keyless rows group by their action text so they are still split by what they were given
+    df["_group"] = [k if k is not None else f"text:{t}" for k, t in zip(df["action_key"], df["recommended_action"])]
+
     result: list[dict] = []
-    for seg_name, grp in selected.groupby("segment_name"):
-        if grp.empty:
-            continue
-
-        # Most common action in this segment
-        action_counts = grp["recommended_action"].value_counts() if "recommended_action" in grp.columns else pd.Series()
-        top_action = action_counts.index[0] if len(action_counts) > 0 else ""
-
-        customer_ids = grp["customer_id"].tolist() if "customer_id" in grp.columns else []
-
+    for (seg_name, _g), grp in df.groupby(["segment_name", "_group"], sort=False):
+        key = grp["action_key"].iloc[0]
+        top_action = str(grp["recommended_action"].value_counts().index[0])
         result.append({
             "segment_name":       str(seg_name),
-            "customer_count":     len(grp),
-            "customer_ids":       customer_ids,
+            "action_key":         key,
             "recommended_action": top_action,
+            "customer_count":     len(grp),
+            "customer_ids":       grp["customer_id"].tolist() if "customer_id" in grp.columns else [],
             "expected_profit":    round(float(grp["expected_profit"].sum()), 2),
             "actual_spend":       round(float(grp["promo_cost"].sum()), 2),
-            "dotdash_offer":      _infer_dotdash_offer(top_action),
+            "dotdash_offer":      infer_dotdash_offer(key, top_action),
         })
 
-    # Sort by expected_profit descending (most valuable segment first)
+    # Most valuable group first
     result.sort(key=lambda x: x["expected_profit"], reverse=True)
     return result
 
