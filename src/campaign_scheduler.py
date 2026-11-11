@@ -58,7 +58,8 @@ WAVE_MAP = {
     "Off-Peak Traffic Driver: ส่วนลดพิเศษช่วงเงียบ": 1,
     "Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)":   1,
     "VIP Early Access":                                       3,
-    "VIP Reward: แจกแต้ม X2":                                 3,
+    "VIP Reward: แจกแต้มพิเศษ 100 แต้ม":                          3,
+    "VIP Reward: แจกแต้มพิเศษ 80 แต้ม":                           3,
     "Standard Retention (Festival Guard)":                    2,
 }
 # Anything not in WAVE_MAP → Wave 2 (default peak upsell)
@@ -70,7 +71,7 @@ MESSAGE_TEMPLATES = {
         "จำกัดเวลา — ดูรายละเอียด: {link}"
     ),
     "Off-Peak VIP Points: ดึงลูกค้าช่วงเงียบ (แต้มพิเศษ)": (
-        "⭐ VIP เท่านั้น! สะสมแต้ม 2× เมื่อช้อปก่อน {peak_start}:00 น. วันนี้. "
+        "⭐ VIP เท่านั้น! รับแต้มพิเศษเมื่อช้อปก่อน {peak_start}:00 น. วันนี้. "
         "ใช้สิทธิ์ได้เลย: {link}"
     ),
     "Push Promotion: เซตคู่คุ้มค่า (Bundle)": (
@@ -80,8 +81,11 @@ MESSAGE_TEMPLATES = {
         "🌟 {customer_id} คุณได้รับสิทธิ์ VIP ก่อนใคร! {offer_short} พร้อมบริการพิเศษ. "
         "จองเลย: {link}"
     ),
-    "VIP Reward: แจกแต้ม X2": (
-        "🎯 แต้มพิเศษ ×2 สำหรับคุณ! {offer_short}. ช้อปเลยก่อนหมดเวลา: {link}"
+    "VIP Reward: แจกแต้มพิเศษ 100 แต้ม": (
+        "🎯 แต้มพิเศษสำหรับคุณ! {offer_short}. ช้อปเลยก่อนหมดเวลา: {link}"
+    ),
+    "VIP Reward: แจกแต้มพิเศษ 80 แต้ม": (
+        "🎯 แต้มพิเศษสำหรับคุณ! {offer_short}. ช้อปเลยก่อนหมดเวลา: {link}"
     ),
     "Standard Retention": (
         "💌 เรายังอยากเจอคุณ! {offer_short} — กลับมาช้อปรับสิทธิ์นี้เลย: {link}"

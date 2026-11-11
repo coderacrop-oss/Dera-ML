@@ -77,7 +77,7 @@ X-API-Key: <key>
   },
   "action_breakdown": {
     "Win-Back: ส่วนลด 15%": 82,
-    "VIP Reward: แจกแต้ม X2": 64,
+    "VIP Reward: แจกแต้มพิเศษ 100 แต้ม": 64,
     "Early Win-Back: ส่วนลดพิเศษ": 41,
     "Welcome: ยินดีต้อนรับ": 23
   },

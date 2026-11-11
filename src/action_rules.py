@@ -159,7 +159,7 @@ SURE_THING_RULES = [
         "time_context": ["off_peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -201,7 +201,7 @@ PERSUADABLE_RULES = [
         "tiers":        ["loyal"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -381,7 +381,7 @@ PERSUADABLE_RULES = [
         "tiers":   ["champions"],
         "rfm_min": "vip_rfm_threshold",
         "rate_key": "vip_points",
-        "action":  "VIP Reward: แจกแต้ม X2",
+        "action":  "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -479,7 +479,7 @@ PERSUADABLE_RULES = [
         "time_context": ["peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "peak_upsell",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 80 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 80,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -489,7 +489,7 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -683,8 +683,15 @@ def infer_dotdash_offer(action_key: str | None, action: str = "") -> dict:
     return {**_offer_from_action_text(action), "action_key": None}
 
 
+# Names that were renamed; rows written before the rename still carry them.  The old name was shared
+# by rules with different points, so it maps to what text-matching always answered (the first rule).
+_LEGACY_ACTION_NAMES = {"VIP Reward: แจกแต้ม X2": "st_vip_reward_offpeak"}
+
+
 def _offer_from_action_text(action: str) -> dict:
-    """Legacy: rule-template prefix match, then keyword fallback."""
+    """Legacy: renamed-action lookup, rule-template prefix match, then keyword fallback."""
+    if action in _LEGACY_ACTION_NAMES:
+        return get_dotdash_offer_by_id(_LEGACY_ACTION_NAMES[action])
     for rule in SURE_THING_RULES + PERSUADABLE_RULES:
         prefix = rule["action"].split("{bundle}")[0].strip().rstrip(":").strip()
         if prefix and prefix in action:
