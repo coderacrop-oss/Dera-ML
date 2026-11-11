@@ -63,9 +63,11 @@ _GOAL_LABELS: dict[str, str] = {
 def _run_pipeline(
     pos_file: str,
     promo_response: str | None,
+    point_cost_per_point: float | None = None,
 ) -> tuple[pd.DataFrame, object]:
     """Run L0-L4 without budget filter. Returns (detail_df, ctx)."""
     ctx = build_serving_context(pos_file, promo_response)
+    ctx.point_cost_per_point = point_cost_per_point   # read by decide_for_customers
 
     # Phase 1: build store-level intelligence from anonymous data
     try:
@@ -204,7 +206,8 @@ def _with_bundle(offer: dict, grp: pd.DataFrame, pairs: dict | None) -> dict:
             "bundle_low_coverage": coverage < CONFIG["bundle_low_coverage_threshold"]}
 
 
-def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None) -> list[dict]:
+def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None,
+                            points_priced_by_shop: bool = False) -> list[dict]:
     """Return DotDash draft-campaign specs: ONE GROUP PER (segment, action_key).
 
     DotDash creates one campaign per group with one reward, so a segment whose customers were
@@ -215,6 +218,8 @@ def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None) -
     offer is inferred from that text (legacy, logged).
     ``pairs`` (customer_id -> personal product pair, see bundle_pairs) adds bundle_items,
     bundle_coverage and bundle_low_coverage to each dotdash_offer, computed per group.
+    Each group also gets cost_source: "shop_provided" for a points group when the shop's point value
+    priced it (points_priced_by_shop), else "estimated".
     """
     if selected.empty or "segment_name" not in selected.columns:
         return []
@@ -232,6 +237,7 @@ def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None) -
     for (seg_name, _g), grp in df.groupby(["segment_name", "_group"], sort=False):
         key = grp["action_key"].iloc[0]
         top_action = str(grp["recommended_action"].value_counts().index[0])
+        offer = _with_bundle(infer_dotdash_offer(key, top_action), grp, pairs)
         result.append({
             "segment_name":       str(seg_name),
             "action_key":         key,
@@ -240,7 +246,9 @@ def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None) -
             "customer_ids":       grp["customer_id"].tolist() if "customer_id" in grp.columns else [],
             "expected_profit":    round(float(grp["expected_profit"].sum()), 2),
             "actual_spend":       round(float(grp["promo_cost"].sum()), 2),
-            "dotdash_offer":      _with_bundle(infer_dotdash_offer(key, top_action), grp, pairs),
+            "dotdash_offer":      offer,
+            "cost_source":        ("shop_provided" if points_priced_by_shop and offer["offer_type"] == "points"
+                                   else "estimated"),
         })
 
     # Most valuable group first
@@ -259,6 +267,8 @@ def run(
     goal: GOAL = "maximize_profit",
     pos_file: str = "data/transactions.csv",
     promo_response: str | None = None,
+    point_value_thb: float | None = None,
+    redemption_rate: float | None = None,
 ) -> dict:
     """Plan a campaign and return a structured summary report.
 
@@ -275,6 +285,12 @@ def run(
         Path to POS CSV (default: data/transactions.csv).
     promo_response : str, optional
         Path to labels CSV containing is_treated and post_promo_visit columns.
+    point_value_thb : float, optional
+        What one loyalty point costs the shop in baht.  When given, points offers are costed as
+        points x point_value_thb x redemption_rate and their groups report cost_source
+        "shop_provided"; otherwise the 2%-of-basket estimate is used ("estimated").
+    redemption_rate : float, optional
+        Share of awarded points that is redeemed, in (0, 1]; default 1.0; needs point_value_thb.
 
     Returns
     -------
@@ -288,8 +304,17 @@ def run(
     if goal not in _GOAL_SEGMENTS:
         raise ValueError(f"goal ต้องเป็นหนึ่งใน: {list(_GOAL_SEGMENTS.keys())}")
 
+    if point_value_thb is not None and point_value_thb <= 0:
+        raise ValueError("point_value_thb ต้องมากกว่า 0")
+    if redemption_rate is not None:
+        if point_value_thb is None:
+            raise ValueError("redemption_rate ต้องระบุคู่กับ point_value_thb")
+        if not 0 < redemption_rate <= 1:
+            raise ValueError("redemption_rate ต้องอยู่ในช่วง (0, 1]")
+    point_cost = None if point_value_thb is None else point_value_thb * (1.0 if redemption_rate is None else redemption_rate)
+
     # ── Step 1: Run pipeline ────────────────────────────────────────────────
-    detail, _ctx = _run_pipeline(pos_file, promo_response)
+    detail, _ctx = _run_pipeline(pos_file, promo_response, point_cost)
 
     total_customers  = len(detail)
     total_viable     = int((detail["should_send"] == 1).sum())
@@ -337,7 +362,8 @@ def run(
     if not selected.empty and "segment_name" in selected.columns:
         segment_breakdown = selected["segment_name"].value_counts().to_dict()
 
-    dotdash_segments = _build_dotdash_segments(selected, personal_pairs(_ctx.raw_df))
+    dotdash_segments = _build_dotdash_segments(selected, personal_pairs(_ctx.raw_df),
+                                               points_priced_by_shop=point_cost is not None)
 
     report = {
         # Meta

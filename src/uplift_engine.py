@@ -1140,6 +1140,7 @@ def _select_action(
     bundle_name: str = "",
     rescue: bool = False,
     clv_at_risk: float = 0.0,
+    point_cost_per_point: float | None = None,
 ) -> tuple[str, float, float, str, str | None]:
     """
     Step 2 of the 2-step decision: select the best profitable action for customers
@@ -1161,7 +1162,7 @@ def _select_action(
     Returns (action_name, expected_profit, send_window).
     Returns ("", baseline_profit, time_context) if no profitable action found.
     """
-    from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, cluster_tier, matches
+    from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, cluster_tier, matches, get_dotdash_offer
 
     if not bundle_name:
         bundle_name = top_bundle_name
@@ -1176,43 +1177,50 @@ def _select_action(
     p_treated       = max(0.0, min(1.0, prob_control + uplift))
     baseline_profit = round(gross_margin * p_baseline, 2)
 
-    def _incremental(rate_key: str) -> tuple[bool, float, float, float]:
+    def _points_cost(rule: dict):
+        """Shop-provided cost of a points offer (points x THB per point x redemption), else None."""
+        if point_cost_per_point is None:
+            return None
+        offer = get_dotdash_offer(rule)
+        return offer["points_amount"] * point_cost_per_point if offer["offer_type"] == "points" else None
+
+    def _incremental(rate_key: str, cost=None) -> tuple[bool, float, float, float]:
         """Compute incremental profit = gross_margin × (p_treated − p_baseline) − promo_cost.
 
         Returns (viable, incremental_profit, gross_margin_val, promo_cost).
         Used consistently across all promo types so ROI comparisons are meaningful.
         """
         cost_rate         = PROMO_COST_RATES[rate_key]
-        promo_cost        = avg_spent * cost_rate
+        promo_cost        = avg_spent * cost_rate if cost is None else cost
         gross_rev         = avg_spent * (1 - CONFIG["default_discount_rate"])
         net_profit        = gross_rev - avg_spent * cogs - promo_cost
         net_margin        = net_profit / gross_rev if gross_rev > 0 else 0
         incremental_profit = round(gross_margin * (p_treated - p_baseline) - promo_cost, 2)
         return (net_margin >= MIN_MARGIN and incremental_profit > 0), incremental_profit, round(gross_margin, 2), round(promo_cost, 2)
 
-    def _viable(rate_key: str) -> tuple[bool, float, float]:
-        ok, inc_profit, _gm, promo_cost = _incremental(rate_key)
+    def _viable(rate_key: str, cost=None) -> tuple[bool, float, float]:
+        ok, inc_profit, _gm, promo_cost = _incremental(rate_key, cost)
         return ok, inc_profit, promo_cost
 
-    def _viable_loyalty(rate_key: str) -> tuple[bool, float, float]:
+    def _viable_loyalty(rate_key: str, cost=None) -> tuple[bool, float, float]:
         """Sure Things convert regardless — don't require incremental > 0.
         Only check that the promo cost doesn't eliminate baseline profit.
         Uses incremental formula for consistent ROI reporting."""
-        ok, inc_profit, _gm, promo_cost = _incremental(rate_key)
+        ok, inc_profit, _gm, promo_cost = _incremental(rate_key, cost)
         # Sure Things: viable if baseline profit covers promo cost
         cost_rate  = PROMO_COST_RATES[rate_key]
-        promo_cost = avg_spent * cost_rate
+        promo_cost = avg_spent * cost_rate if cost is None else cost
         baseline_ok = (gross_margin * p_baseline - promo_cost) > 0
         return baseline_ok, inc_profit, round(promo_cost, 2)
 
-    def _viable_clv(rate_key: str) -> tuple[bool, float, float]:
+    def _viable_clv(rate_key: str, cost=None) -> tuple[bool, float, float]:
         """Rescue tiers: justified when promo_cost ≤ CLV-at-risk AND baseline profitable.
         Falls back to _viable_loyalty when no CLV data available (clv_at_risk <= 0)."""
         if clv_at_risk <= 0:
-            return _viable_loyalty(rate_key)
+            return _viable_loyalty(rate_key, cost)
         cost_rate  = PROMO_COST_RATES[rate_key]
-        promo_cost = avg_spent * cost_rate
-        _ok, inc_profit, _gm, _pc = _incremental(rate_key)
+        promo_cost = avg_spent * cost_rate if cost is None else cost
+        _ok, inc_profit, _gm, _pc = _incremental(rate_key, cost)
         baseline_ok = (gross_margin * p_baseline - promo_cost) > 0
         return (promo_cost <= clv_at_risk and baseline_ok), inc_profit, round(promo_cost, 2)
 
@@ -1222,7 +1230,7 @@ def _select_action(
     if group == "sure_thing":
         for rule in SURE_THING_RULES:
             if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
-                ok, profit, promo_cost = _viable_loyalty(rule["rate_key"])
+                ok, profit, promo_cost = _viable_loyalty(rule["rate_key"], _points_cost(rule))
                 if ok:
                     action = rule["action"].format(bundle=bundle_name)
                     return action, profit, promo_cost, send_window, rule["id"]
@@ -1235,7 +1243,7 @@ def _select_action(
     candidates: list[tuple[str, float, float, str, str]] = []
     for rule in PERSUADABLE_RULES:
         if matches(rule, tier, is_off_peak, rfm_seg, is_spike, uplift):
-            ok, profit, promo_cost = viable_fn(rule["rate_key"])
+            ok, profit, promo_cost = viable_fn(rule["rate_key"], _points_cost(rule))
             if ok:
                 action = rule["action"].format(bundle=bundle_name)
                 candidates.append((action, profit, promo_cost, send_window, rule["id"]))
@@ -1259,6 +1267,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
     rfm_df, context_df = ctx.rfm_df, ctx.context_df
     top_bundle_name = ctx.top_bundle_name
     _product_cogs, _default_cogs = ctx.product_cogs, ctx.default_cogs
+    _ppc = getattr(ctx, 'point_cost_per_point', None)   # THB per point x redemption rate; None = estimate
     if customer_ids is not None:
         cust_agg = cust_agg[cust_agg['customer_id'].isin(customer_ids)]
     temp_df = cust_agg.copy()
@@ -1391,6 +1400,8 @@ def decide_for_customers(model, ctx, customer_ids=None):
                 m_pts    = CONFIG["milestone_points"]
                 m_margin = m_basket * (1 - cogs)
                 m_cost   = m_basket * CONFIG["promo_cost_rates"]["milestone_reward"]
+                if _ppc is not None:      # shop-provided point value: the milestone reward is points
+                    m_cost = m_pts * _ppc
                 p_mile   = max(0.0, min(1.0, prob_c + uplift * 0.5))
                 if m_margin * (p_mile - p_baseline) - m_cost > 0:
                     m_profit = round(m_margin * (p_mile - p_baseline) - m_cost, 2)
@@ -1463,6 +1474,7 @@ def decide_for_customers(model, ctx, customer_ids=None):
 
         # ── Step 2: Action menu (pre-validated profitable actions only) ───────
         action, profit, promo_cost, send_window, action_key = _select_action(
+            point_cost_per_point=_ppc,
             group=group, avg_spent=avg_spent, cogs=cogs,
             uplift=uplift, prob_control=prob_c,
             rfm_seg=rfm_seg, is_spike=is_spike,

@@ -55,6 +55,8 @@ X-API-Key: <key>
 | `budget` | float | ถ้า mode=budget | งบสูงสุดในหน่วยบาท |
 | `target_profit` | float | ถ้า mode=target_profit | กำไรที่ต้องการในหน่วยบาท |
 | `goal` | enum | ❌ (default: maximize_profit) | `maximize_profit` / `win_back` / `retain_loyal` / `maximize_reach` |
+| `point_value_thb` | float > 0 | ❌ | ต้นทุนของ 1 แต้มสำหรับร้านนี้ (บาท) ถ้าส่งมา ข้อเสนอแบบแต้มจะคิดต้นทุน = แต้ม × point_value_thb × redemption_rate และกลุ่มนั้นมี `cost_source: "shop_provided"` ถ้าไม่ส่งใช้ค่าประมาณ 2% ของยอดซื้อเฉลี่ย (`cost_source: "estimated"`) |
+| `redemption_rate` | float (0, 1] | ❌ (ต้องส่งคู่กับ `point_value_thb`; default 1.0) | สัดส่วนแต้มที่ลูกค้าแลกจริง |
 
 #### Response 200
 
@@ -139,7 +141,7 @@ X-API-Key: <key>
 
 | Field | Description |
 |-------|-------------|
-| `dotdash_segments` | array — **1 กลุ่ม = 1 ของรางวัล**: แบ่งตาม (segment_name, action_key) ลูกค้าในกลุ่มได้ `dotdash_offer` เดียวกันทั้งหมด. ฟิลด์: `segment_name`, `action_key` (id เสถียรของกฎ ใช้จับคู่แทนชื่อ action), `recommended_action` (ข้อความที่พบบ่อยในกลุ่ม แสดงผลเท่านั้น), `customer_count`, `customer_ids`, `expected_profit`, `actual_spend`, `dotdash_offer` (`offer_type`, `points_amount` หรือ `coupon_type`+`coupon_value`, `min_spend`, `expiry_days`, `action_key`, **`bundle_items`** (คู่สินค้าที่พบบ่อยที่สุดในกลุ่ม หรือ null), **`bundle_coverage`** (สัดส่วนลูกค้าในกลุ่มนี้ (segment × action) ที่คู่นี้เป็นคู่ของตัวเอง 0–1; ลูกค้าที่ไม่มีคู่นับในตัวหาร), **`bundle_low_coverage`** (true เมื่อ coverage ต่ำกว่า `bundle_low_coverage_threshold` = 0.5)). ตัวอย่างข้างบนมาจากการรันจริงบนข้อมูลทดสอบ (fixture) ตัดรายชื่อลูกค้าให้สั้น |
+| `dotdash_segments` | array — **1 กลุ่ม = 1 ของรางวัล**: แบ่งตาม (segment_name, action_key) ลูกค้าในกลุ่มได้ `dotdash_offer` เดียวกันทั้งหมด. ฟิลด์: `segment_name`, `action_key` (id เสถียรของกฎ ใช้จับคู่แทนชื่อ action), `recommended_action` (ข้อความที่พบบ่อยในกลุ่ม แสดงผลเท่านั้น), `customer_count`, `customer_ids`, `expected_profit`, `actual_spend`, `dotdash_offer` (`offer_type`, `points_amount` หรือ `coupon_type`+`coupon_value`, `min_spend`, `expiry_days`, `action_key`, **`bundle_items`** (คู่สินค้าที่พบบ่อยที่สุดในกลุ่ม หรือ null), **`bundle_coverage`** (สัดส่วนลูกค้าในกลุ่มนี้ (segment × action) ที่คู่นี้เป็นคู่ของตัวเอง 0–1; ลูกค้าที่ไม่มีคู่นับในตัวหาร), **`bundle_low_coverage`** (true เมื่อ coverage ต่ำกว่า `bundle_low_coverage_threshold` = 0.5)) และ **`cost_source`** ระดับกลุ่ม (`estimated` | `shop_provided`). ตัวอย่างข้างบนมาจากการรันจริงบนข้อมูลทดสอบ (fixture) ตัดรายชื่อลูกค้าให้สั้น |
 
 #### Response 400
 
