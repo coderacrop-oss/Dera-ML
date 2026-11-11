@@ -2,3 +2,4 @@ fastapi
 uvicorn
 pytest
 httpx
+econml  # needed to load champion v8+ (R-Learner/DML via src/rlearner_wrapper.py); X-learner v1-v7 do not need it
