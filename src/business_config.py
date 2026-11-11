@@ -73,6 +73,7 @@ CONFIG = {
     "do_nothing_recession_threshold": 50.0,   # %Do-Nothing required to pass gate in recession
 
     # === Uplift decision rules ===
+    "bundle_low_coverage_threshold": 0.5,  # dotdash group: flag bundle_low_coverage when < this share of customers has the offered pair
     "low_basket_threshold":   100,    # AOV below this → Do Nothing
     "mid_basket_threshold":   800,    # AOV below this → off-peak promo
     "negative_uplift_guard":  -0.04,  # uplift below this → Do Nothing

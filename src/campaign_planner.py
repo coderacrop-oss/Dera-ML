@@ -28,6 +28,8 @@ from uplift_engine import REGISTRY_PATH, _check_features, build_serving_context,
 from model_registry import ModelRegistry, RegistryError
 from ingest import detect_source, ingest_meripos, quality_gate
 from store_intelligence import build_store_profile, get_store_embedding
+from bundle_pairs import group_bundle, personal_pairs
+from business_config import CONFIG
 from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer, infer_dotdash_offer
 
 
@@ -194,7 +196,15 @@ def _infer_dotdash_offer(action: str) -> dict:
     return infer_dotdash_offer(None, action)
 
 
-def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:
+def _with_bundle(offer: dict, grp: pd.DataFrame, pairs: dict | None) -> dict:
+    """Add the group's bundle suggestion (always the same three fields, so the schema is stable)."""
+    ids = grp["customer_id"].astype(str).tolist() if "customer_id" in grp.columns else []
+    items, coverage = group_bundle(ids, pairs or {})
+    return {**offer, "bundle_items": items, "bundle_coverage": coverage,
+            "bundle_low_coverage": coverage < CONFIG["bundle_low_coverage_threshold"]}
+
+
+def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None) -> list[dict]:
     """Return DotDash draft-campaign specs: ONE GROUP PER (segment, action_key).
 
     DotDash creates one campaign per group with one reward, so a segment whose customers were
@@ -203,6 +213,8 @@ def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:
     customer_count, customer_ids, expected_profit, actual_spend, dotdash_offer (incl. action_key).
     Rows without an action_key (data from before it existed) are grouped by action text and their
     offer is inferred from that text (legacy, logged).
+    ``pairs`` (customer_id -> personal product pair, see bundle_pairs) adds bundle_items,
+    bundle_coverage and bundle_low_coverage to each dotdash_offer, computed per group.
     """
     if selected.empty or "segment_name" not in selected.columns:
         return []
@@ -228,7 +240,7 @@ def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:
             "customer_ids":       grp["customer_id"].tolist() if "customer_id" in grp.columns else [],
             "expected_profit":    round(float(grp["expected_profit"].sum()), 2),
             "actual_spend":       round(float(grp["promo_cost"].sum()), 2),
-            "dotdash_offer":      infer_dotdash_offer(key, top_action),
+            "dotdash_offer":      _with_bundle(infer_dotdash_offer(key, top_action), grp, pairs),
         })
 
     # Most valuable group first
@@ -325,7 +337,7 @@ def run(
     if not selected.empty and "segment_name" in selected.columns:
         segment_breakdown = selected["segment_name"].value_counts().to_dict()
 
-    dotdash_segments = _build_dotdash_segments(selected)
+    dotdash_segments = _build_dotdash_segments(selected, personal_pairs(_ctx.raw_df))
 
     report = {
         # Meta
