@@ -1,13 +1,13 @@
 customer_id,recommended_action,expected_profit,should_send
 c000,Loyalty Nurture: แต้มสะสม,-1.44,1
-c001,VIP Reward: แจกแต้ม X2,-1.47,1
+c001,VIP Reward: แจกแต้มพิเศษ 100 แต้ม,-1.47,1
 c002,Loyalty Nurture: แต้มสะสม,-1.96,1
 c003,Loyalty Nurture: แต้มสะสม,0.37,1
 c004,Loyalty Nurture: แต้มสะสม,-1.3,1
 c005,Do Nothing (Low Basket Size),2.68,0
 c006,Do Nothing (Low Basket Size),2.35,0
 c007,Welcome: ยินดีต้อนรับ กลับมาอีกนะ!,-3.77,1
-c008,VIP Reward: แจกแต้ม X2,-1.97,1
+c008,VIP Reward: แจกแต้มพิเศษ 100 แต้ม,-1.97,1
 c009,Loyalty Nurture: แต้มสะสม,-0.07,1
 c010,Do Nothing (Low Basket Size),2.7,0
 c011,Do Nothing (Do Not Disturb),4.9,0
@@ -76,7 +76,7 @@ c073,Do Nothing (Low Basket Size),3.19,0
 c074,Loyalty Nurture: แต้มสะสม,-1.84,1
 c075,Do Nothing (Do Not Disturb),7.01,0
 c076,Do Nothing (Do Not Disturb),4.85,0
-c077,VIP Reward: แจกแต้ม X2,-2.08,1
+c077,VIP Reward: แจกแต้มพิเศษ 100 แต้ม,-2.08,1
 c078,Loyalty Nurture: แต้มสะสม,0.16,1
 c079,Do Nothing (Do Not Disturb),4.56,0
 c080,Do Nothing (Do Not Disturb),4.15,0
@@ -108,7 +108,7 @@ c105,Loyalty Nurture: แต้มสะสม,-2.23,1
 c106,Loyalty Nurture: แต้มสะสม,-2.66,1
 c107,Loyalty Nurture: แต้มสะสม,0.17,1
 c108,Loyalty Nurture: แต้มสะสม,-3.38,1
-c109,VIP Reward: แจกแต้ม X2,-2.75,1
+c109,VIP Reward: แจกแต้มพิเศษ 100 แต้ม,-2.75,1
 c110,Do Nothing (Do Not Disturb),7.95,0
 c111,Loyalty Nurture: แต้มสะสม,-3.21,1
 c112,Loyalty Nurture: แต้มสะสม,-2.05,1

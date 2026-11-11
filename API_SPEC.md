@@ -55,11 +55,14 @@ X-API-Key: <key>
 | `budget` | float | ถ้า mode=budget | งบสูงสุดในหน่วยบาท |
 | `target_profit` | float | ถ้า mode=target_profit | กำไรที่ต้องการในหน่วยบาท |
 | `goal` | enum | ❌ (default: maximize_profit) | `maximize_profit` / `win_back` / `retain_loyal` / `maximize_reach` |
+| `point_value_thb` | float > 0 | ❌ | ต้นทุนของ 1 แต้มสำหรับร้านนี้ (บาท) ถ้าส่งมา ข้อเสนอแบบแต้มจะคิดต้นทุน = แต้ม × point_value_thb × redemption_rate และกลุ่มนั้นมี `cost_source: "shop_provided"` ถ้าไม่ส่งใช้ค่าประมาณ 2% ของยอดซื้อเฉลี่ย (`cost_source: "estimated"`) |
+| `redemption_rate` | float (0, 1] | ❌ (ต้องส่งคู่กับ `point_value_thb`; default 1.0) | สัดส่วนแต้มที่ลูกค้าแลกจริง |
 
 #### Response 200
 
 ```json
 {
+  "schema_version": "1",
   "plan_id": "plan_20261106_143022",
   "store_id": "store_abc",
   "generated_at": "2026-11-06T14:30:22Z",
@@ -77,7 +80,7 @@ X-API-Key: <key>
   },
   "action_breakdown": {
     "Win-Back: ส่วนลด 15%": 82,
-    "VIP Reward: แจกแต้ม X2": 64,
+    "VIP Reward: แจกแต้มพิเศษ 100 แต้ม": 64,
     "Early Win-Back: ส่วนลดพิเศษ": 41,
     "Welcome: ยินดีต้อนรับ": 23
   },
@@ -94,14 +97,28 @@ X-API-Key: <key>
   },
   "dotdash_segments": [
     {
-      "segment_name": "At-Risk",
-      "customer_count": 95,
-      "action": "Win-Back: ส่วนลด 15%",
-      "offer": "ส่วนลด 15%",
-      "expected_profit": 4200.00,
-      "cost": 850.00,
-      "send_date": "2026-11-15",
-      "wave": 1
+      "segment_name": "Churn Risk",
+      "action_key": "st_loyalty_nurture",
+      "recommended_action": "Loyalty Nurture: แต้มสะสม",
+      "customer_count": 1,
+      "customer_ids": [
+        "c024",
+        "..."
+      ],
+      "expected_profit": 0.95,
+      "actual_spend": 0.4,
+      "dotdash_offer": {
+        "offer_type": "points",
+        "points_amount": 50,
+        "min_spend": 0,
+        "expiry_days": 30,
+        "action_key": "st_loyalty_nurture",
+        "action_group": "loyalty_reward",
+        "bundle_items": null,
+        "bundle_coverage": 0.0,
+        "bundle_low_coverage": true
+      },
+      "cost_source": "estimated"
     }
   ]
 }
@@ -109,7 +126,7 @@ X-API-Key: <key>
 
 | Field | Description |
 |-------|-------------|
-| `dotdash_segments` | array — per-segment detail สำหรับ DotDash display: segment_name, customer_count, action, offer, expected_profit, cost, send_date, wave |
+| `dotdash_segments` | array — **1 กลุ่ม = 1 ของรางวัล**: แบ่งตาม (segment_name, action_key) ลูกค้าในกลุ่มได้ `dotdash_offer` เดียวกันทั้งหมด. ฟิลด์: `segment_name`, `action_key` (id เสถียรของกฎ ใช้จับคู่แทนชื่อ action), `recommended_action` (ข้อความที่พบบ่อยในกลุ่ม แสดงผลเท่านั้น), `customer_count`, `customer_ids`, `expected_profit`, `actual_spend`, `dotdash_offer` (`offer_type`, `points_amount` หรือ `coupon_type`+`coupon_value`, `min_spend`, `expiry_days`, `action_key`, `action_group` (`win_back|retain|loyalty_reward|onboarding|upsell|other`), **`bundle_items`** (คู่สินค้าที่พบบ่อยที่สุดในกลุ่ม หรือ null), **`bundle_coverage`** (สัดส่วนลูกค้าในกลุ่มนี้ (segment × action) ที่คู่นี้เป็นคู่ของตัวเอง 0–1; ลูกค้าที่ไม่มีคู่นับในตัวหาร), **`bundle_low_coverage`** (true เมื่อ coverage ต่ำกว่า `bundle_low_coverage_threshold` = 0.5)) และ **`cost_source`** ระดับกลุ่ม (`estimated` | `shop_provided`) ทุก response ของ `/campaign/plan` มี `schema_version` ระดับบนสุด (เลขรูปแบบ output; เพิ่มฟิลด์ไม่เปลี่ยนเลข เปลี่ยนความหมาย/ลบฟิลด์ต้องเปลี่ยนเลข). ตัวอย่างข้างบนมาจากการรันจริงบนข้อมูลทดสอบ (fixture) ตัดรายชื่อลูกค้าให้สั้น |
 
 #### Response 400
 
@@ -119,6 +136,12 @@ X-API-Key: <key>
   "message": "ต้องระบุ budget หรือ target_profit อย่างใดอย่างหนึ่ง"
 }
 ```
+
+#### Response 422
+
+`point_value_thb` ≤ 0, `redemption_rate` นอกช่วง (0, 1] หรือส่ง `redemption_rate` โดยไม่มี `point_value_thb` → **422** `validation_error` (ไม่ใช่ 400)
+
+> **หมายเหตุ:** `point_value_thb` / `redemption_rate` มีผลที่ `POST /campaign/plan` เท่านั้น ยังไม่มีผลกับ `run_layer4` (เส้นที่ ml-service ของ Dera เรียก) ที่นั่นต้นทุนแต้มยังเป็นค่าประมาณ (`cost_source: "estimated"`)
 
 ---
 

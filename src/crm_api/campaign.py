@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .auth import require_key
 from .errors import ApiError
@@ -79,6 +79,15 @@ class PlanRequest(BaseModel):
     budget:        float | None = None
     target_profit: float | None = None
     goal:          str = "maximize_profit"
+    # optional per-shop loyalty point cost (omit -> ML uses its 2%-of-basket estimate, cost_source "estimated")
+    point_value_thb: float | None = Field(None, gt=0)       # baht one point costs the shop
+    redemption_rate: float | None = Field(None, gt=0, le=1)  # share of awarded points redeemed
+
+    @model_validator(mode="after")
+    def _rate_needs_value(self):
+        if self.redemption_rate is not None and self.point_value_thb is None:
+            raise ValueError("redemption_rate ต้องระบุคู่กับ point_value_thb")
+        return self
 
 
 class AnalyzeRequest(BaseModel):
@@ -157,6 +166,8 @@ def campaign_plan(body: PlanRequest, request: Request, _: None = Depends(require
             target_profit=body.target_profit if body.mode == "target_profit" else None,
             goal=body.goal,
             pos_file=pos_path,
+            point_value_thb=body.point_value_thb,
+            redemption_rate=body.redemption_rate,
         )
     except ValueError as exc:
         raise ApiError(400, "invalid_input", str(exc))
@@ -167,6 +178,7 @@ def campaign_plan(body: PlanRequest, request: Request, _: None = Depends(require
     generated_at = _now_iso()
 
     response = {
+        "schema_version": report.get("schema_version"),
         "plan_id":       plan_id,
         "store_id":      body.store_id,
         "generated_at":  generated_at,

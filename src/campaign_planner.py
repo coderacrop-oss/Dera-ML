@@ -28,7 +28,9 @@ from uplift_engine import REGISTRY_PATH, _check_features, build_serving_context,
 from model_registry import ModelRegistry, RegistryError
 from ingest import detect_source, ingest_meripos, quality_gate
 from store_intelligence import build_store_profile, get_store_embedding
-from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer
+from bundle_pairs import group_bundle, personal_pairs
+from business_config import CONFIG, OUTPUT_SCHEMA_VERSION
+from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer, infer_dotdash_offer
 
 
 # ---------------------------------------------------------------------------
@@ -61,9 +63,11 @@ _GOAL_LABELS: dict[str, str] = {
 def _run_pipeline(
     pos_file: str,
     promo_response: str | None,
+    point_cost_per_point: float | None = None,
 ) -> tuple[pd.DataFrame, object]:
     """Run L0-L4 without budget filter. Returns (detail_df, ctx)."""
     ctx = build_serving_context(pos_file, promo_response)
+    ctx.point_cost_per_point = point_cost_per_point   # read by decide_for_customers
 
     # Phase 1: build store-level intelligence from anonymous data
     try:
@@ -190,67 +194,64 @@ def _find_budget_for_target(approved: pd.DataFrame, target_profit: float) -> flo
 # ---------------------------------------------------------------------------
 
 def _infer_dotdash_offer(action: str) -> dict:
-    """Map a recommended_action string back to its dotdash_offer spec.
-
-    Tries rule template matching first (strips ``{bundle}`` substitutions),
-    then falls back to keyword-based inference.
-    """
-    if not action or action.startswith("Do Nothing") or action.startswith("Zero-Cost"):
-        return {"offer_type": "points", "points_amount": 0, "min_spend": 0, "expiry_days": 0}
-
-    # Template match: check every rule to see if its action template prefix
-    # appears in the actual action string (bundle will have been substituted)
-    for rule in SURE_THING_RULES + PERSUADABLE_RULES:
-        template = rule["action"]
-        # Strip {bundle} placeholder — compare the fixed prefix before it
-        prefix = template.split("{bundle}")[0].strip().rstrip(":").strip()
-        if prefix and prefix in action:
-            return get_dotdash_offer(rule)
-
-    # Keyword fallback
-    a = action.lower()
-    if any(w in a for w in ["แต้ม", "vip reward", "loyalty", "points", "milestone",
-                             "early access", "habit"]):
-        return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
-    return {"offer_type": "coupon", "coupon_type": "percent",
-            "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14}
+    """Deprecated text-only alias of action_rules.infer_dotdash_offer (kept one release)."""
+    return infer_dotdash_offer(None, action)
 
 
-def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:
-    """Return per-segment DotDash draft campaign specs from the selected customer frame.
+def _with_bundle(offer: dict, grp: pd.DataFrame, pairs: dict | None) -> dict:
+    """Add the group's bundle suggestion (always the same three fields, so the schema is stable)."""
+    ids = grp["customer_id"].astype(str).tolist() if "customer_id" in grp.columns else []
+    items, coverage = group_bundle(ids, pairs or {})
+    return {**offer, "bundle_items": items, "bundle_coverage": coverage,
+            "bundle_low_coverage": coverage < CONFIG["bundle_low_coverage_threshold"]}
 
-    Each entry tells DotDash exactly what to create:
-      - segment_name, customer_count, customer_ids
-      - recommended_action (most common in segment)
-      - expected_profit, actual_spend
-      - dotdash_offer: {offer_type, points_amount?, coupon_type?, coupon_value?,
-                        min_spend, expiry_days}
+
+def _build_dotdash_segments(selected: pd.DataFrame, pairs: dict | None = None,
+                            points_priced_by_shop: bool = False) -> list[dict]:
+    """Return DotDash draft-campaign specs: ONE GROUP PER (segment, action_key).
+
+    DotDash creates one campaign per group with one reward, so a segment whose customers were
+    given different actions is split — every customer is in the group whose offer they were given.
+    Each entry: segment_name, action_key, recommended_action (most common text in the group),
+    customer_count, customer_ids, expected_profit, actual_spend, dotdash_offer (incl. action_key).
+    Rows without an action_key (data from before it existed) are grouped by action text and their
+    offer is inferred from that text (legacy, logged).
+    ``pairs`` (customer_id -> personal product pair, see bundle_pairs) adds bundle_items,
+    bundle_coverage and bundle_low_coverage to each dotdash_offer, computed per group.
+    Each group also gets cost_source: "shop_provided" for a points group when the shop's point value
+    priced it (points_priced_by_shop), else "estimated".
     """
     if selected.empty or "segment_name" not in selected.columns:
         return []
 
+    df = selected.copy()
+    if "action_key" not in df.columns:
+        df["action_key"] = None
+    if "recommended_action" not in df.columns:
+        df["recommended_action"] = ""
+    df["action_key"] = df["action_key"].astype(object).where(df["action_key"].notna(), None)
+    # keyless rows group by their action text so they are still split by what they were given
+    df["_group"] = [k if k is not None else f"text:{t}" for k, t in zip(df["action_key"], df["recommended_action"])]
+
     result: list[dict] = []
-    for seg_name, grp in selected.groupby("segment_name"):
-        if grp.empty:
-            continue
-
-        # Most common action in this segment
-        action_counts = grp["recommended_action"].value_counts() if "recommended_action" in grp.columns else pd.Series()
-        top_action = action_counts.index[0] if len(action_counts) > 0 else ""
-
-        customer_ids = grp["customer_id"].tolist() if "customer_id" in grp.columns else []
-
+    for (seg_name, _g), grp in df.groupby(["segment_name", "_group"], sort=False):
+        key = grp["action_key"].iloc[0]
+        top_action = str(grp["recommended_action"].value_counts().index[0])
+        offer = _with_bundle(infer_dotdash_offer(key, top_action), grp, pairs)
         result.append({
             "segment_name":       str(seg_name),
-            "customer_count":     len(grp),
-            "customer_ids":       customer_ids,
+            "action_key":         key,
             "recommended_action": top_action,
+            "customer_count":     len(grp),
+            "customer_ids":       grp["customer_id"].tolist() if "customer_id" in grp.columns else [],
             "expected_profit":    round(float(grp["expected_profit"].sum()), 2),
             "actual_spend":       round(float(grp["promo_cost"].sum()), 2),
-            "dotdash_offer":      _infer_dotdash_offer(top_action),
+            "dotdash_offer":      offer,
+            "cost_source":        ("shop_provided" if points_priced_by_shop and offer["offer_type"] == "points"
+                                   else "estimated"),
         })
 
-    # Sort by expected_profit descending (most valuable segment first)
+    # Most valuable group first
     result.sort(key=lambda x: x["expected_profit"], reverse=True)
     return result
 
@@ -266,6 +267,8 @@ def run(
     goal: GOAL = "maximize_profit",
     pos_file: str = "data/transactions.csv",
     promo_response: str | None = None,
+    point_value_thb: float | None = None,
+    redemption_rate: float | None = None,
 ) -> dict:
     """Plan a campaign and return a structured summary report.
 
@@ -282,6 +285,12 @@ def run(
         Path to POS CSV (default: data/transactions.csv).
     promo_response : str, optional
         Path to labels CSV containing is_treated and post_promo_visit columns.
+    point_value_thb : float, optional
+        What one loyalty point costs the shop in baht.  When given, points offers are costed as
+        points x point_value_thb x redemption_rate and their groups report cost_source
+        "shop_provided"; otherwise the 2%-of-basket estimate is used ("estimated").
+    redemption_rate : float, optional
+        Share of awarded points that is redeemed, in (0, 1]; default 1.0; needs point_value_thb.
 
     Returns
     -------
@@ -295,8 +304,17 @@ def run(
     if goal not in _GOAL_SEGMENTS:
         raise ValueError(f"goal ต้องเป็นหนึ่งใน: {list(_GOAL_SEGMENTS.keys())}")
 
+    if point_value_thb is not None and point_value_thb <= 0:
+        raise ValueError("point_value_thb ต้องมากกว่า 0")
+    if redemption_rate is not None:
+        if point_value_thb is None:
+            raise ValueError("redemption_rate ต้องระบุคู่กับ point_value_thb")
+        if not 0 < redemption_rate <= 1:
+            raise ValueError("redemption_rate ต้องอยู่ในช่วง (0, 1]")
+    point_cost = None if point_value_thb is None else point_value_thb * (1.0 if redemption_rate is None else redemption_rate)
+
     # ── Step 1: Run pipeline ────────────────────────────────────────────────
-    detail, _ctx = _run_pipeline(pos_file, promo_response)
+    detail, _ctx = _run_pipeline(pos_file, promo_response, point_cost)
 
     total_customers  = len(detail)
     total_viable     = int((detail["should_send"] == 1).sum())
@@ -344,10 +362,12 @@ def run(
     if not selected.empty and "segment_name" in selected.columns:
         segment_breakdown = selected["segment_name"].value_counts().to_dict()
 
-    dotdash_segments = _build_dotdash_segments(selected)
+    dotdash_segments = _build_dotdash_segments(selected, personal_pairs(_ctx.raw_df),
+                                               points_priced_by_shop=point_cost is not None)
 
     report = {
         # Meta
+        "schema_version":   OUTPUT_SCHEMA_VERSION,
         "mode":             mode,
         "goal":             goal,
         "goal_label":       _GOAL_LABELS[goal],

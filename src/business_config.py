@@ -73,6 +73,7 @@ CONFIG = {
     "do_nothing_recession_threshold": 50.0,   # %Do-Nothing required to pass gate in recession
 
     # === Uplift decision rules ===
+    "bundle_low_coverage_threshold": 0.5,  # dotdash group: flag bundle_low_coverage when < this share of customers has the offered pair
     "low_basket_threshold":   100,    # AOV below this → Do Nothing
     "mid_basket_threshold":   800,    # AOV below this → off-peak promo
     "negative_uplift_guard":  -0.04,  # uplift below this → Do Nothing
@@ -143,3 +144,7 @@ CONFIG = {
     "stock_forecast_weeks":   4,      # default number of weeks to forecast ahead
     "stock_min_history_days": 14,     # minimum days of item history required to forecast
 }
+
+# Version of the output formats (final_campaign_engine_output.csv, broadcast_list.csv, dotdash_segments,
+# segments_latest.json). Bump when any existing field changes meaning or is removed; adding fields does not bump it.
+OUTPUT_SCHEMA_VERSION = "1"

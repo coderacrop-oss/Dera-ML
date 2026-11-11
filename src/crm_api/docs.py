@@ -115,7 +115,9 @@ SEGMENTS = dict(
     tags=["แผนแคมเปญ"], summary="กลุ่มลูกค้า (Segment) ของแผน",
     description=("กลุ่มลูกค้าที่ pipeline แบ่งไว้ พร้อมขนาดกลุ่ม จำนวนที่ส่ง/ไม่ส่ง โปรที่แนะนำ "
                  "การตัดสินใจของ Layer 4 ต่อกลุ่ม และ unit economics\n\n"
-                 "ถ้ายังไม่มีไฟล์กลุ่มลูกค้าของเดือนนั้น จะตอบ `segments: null` พร้อมเหตุผลใน `reason` (ไม่ใช่ error)"),
+                 "ถ้ายังไม่มีไฟล์กลุ่มลูกค้าของเดือนนั้น จะตอบ `segments: null` พร้อมเหตุผลใน `reason` (ไม่ใช่ error)\n\n"
+                 "`action_breakdown` นับตามชื่อ action ส่วน `action_key_breakdown` นับตาม `action_key` ที่คงที่ "
+                 "(`none` = ไม่ส่ง) ควรจับคู่ด้วย key เพราะชื่อ action เปลี่ยนได้ ตารางชื่อ ↔ key อยู่ที่ `docs/dotdash-action-keys.md`"),
     response_description="รายการกลุ่มลูกค้า (มี header `ETag`)",
 )
 PROMOTIONS = dict(
@@ -218,8 +220,11 @@ CAMPAIGN_PLAN = dict(
         "- **สรุปงบ / กำไรคาดการณ์ / ROI**\n"
         "- **action_breakdown**: จำนวนลูกค้าและค่าใช้จ่ายแยกตาม action type\n"
         "- **segment_breakdown**: จำนวนลูกค้าที่ ML เลือกแยกตาม segment\n"
+        "- **dotdash_segments**: กลุ่มสำหรับสร้างแคมเปญใน DotDash — **1 กลุ่ม = 1 ของรางวัล** แบ่งตาม (segment, `action_key`) พร้อม `dotdash_offer`, `bundle_items`/`bundle_coverage` และ `cost_source`\n"
+        "- **schema_version**: เลขรูปแบบของ output\n"
         "- **feasibility**: เป้าหมายทำได้ไหม และ max profit ที่ทำได้จริง\n\n"
         "mode `budget` → ต้องระบุ `budget` (THB) | mode `target_profit` → ต้องระบุ `target_profit` (THB)\n\n"
+        "ระบุ `point_value_thb` (ต้นทุน 1 แต้ม เป็นบาท) และ `redemption_rate` (0–1) ได้ถ้าต้องการให้คิดต้นทุนข้อเสนอแบบแต้มจากค่าของร้าน (ค่าผิดช่วง → 422) ไม่ระบุ = ใช้ค่าประมาณ 2% ของยอดซื้อเฉลี่ย\n\n"
         "ไฟล์ POS จะถูกบันทึกและนำไปใช้กับ `/segment/health` ของร้านนั้นโดยอัตโนมัติ"
     ),
     response_description="แผนแคมเปญพร้อม plan_id สำหรับอ้างอิง",

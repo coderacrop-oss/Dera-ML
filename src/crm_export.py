@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 
 from atomic_io import atomic_write_text
+from business_config import OUTPUT_SCHEMA_VERSION
 
 # Same week layout the scheduler uses (campaign_scheduler.build_schedule wave_week_map), 1-based weeks.
 WAVE_WEEKS = {"1": [1, 3], "2": [2, 4], "3": [1]}
@@ -44,6 +45,7 @@ def write_segments_latest(payload: dict, out_dir: str = "data/processed") -> str
             "suppressed": seg.get("suppressed_count"),
             "recommended_promo": seg.get("recommended_promo"),
             "action_breakdown": seg.get("l4_action_breakdown"),
+            "action_key_breakdown": seg.get("l4_action_key_breakdown"),
             "unit_economics": {
                 "net_profit_per_head": _get(ue, "net_profit_per_head"),
                 "total_projected_profit": _get(ue, "total_projected_profit"),
@@ -53,6 +55,7 @@ def write_segments_latest(payload: dict, out_dir: str = "data/processed") -> str
         })
     doc = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": OUTPUT_SCHEMA_VERSION,
         "gate_status": payload.get("gate_status"),
         "segments": segments,
         "wave_weeks": WAVE_WEEKS,

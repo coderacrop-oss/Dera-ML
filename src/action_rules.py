@@ -64,6 +64,8 @@ EVALUATION STRATEGY
   PERSUADABLE_RULES — best_profit:  all matching viable rules collected, max profit wins.
 """
 
+import logging
+
 from business_config import CONFIG as _CONFIG
 
 
@@ -157,7 +159,7 @@ SURE_THING_RULES = [
         "time_context": ["off_peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -199,7 +201,7 @@ PERSUADABLE_RULES = [
         "tiers":        ["loyal"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -379,7 +381,7 @@ PERSUADABLE_RULES = [
         "tiers":   ["champions"],
         "rfm_min": "vip_rfm_threshold",
         "rate_key": "vip_points",
-        "action":  "VIP Reward: แจกแต้ม X2",
+        "action":  "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -477,7 +479,7 @@ PERSUADABLE_RULES = [
         "time_context": ["peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "peak_upsell",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 80 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 80,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -487,7 +489,7 @@ PERSUADABLE_RULES = [
         "time_context": ["off_peak"],
         "rfm_min":      "vip_rfm_threshold",
         "rate_key":     "vip_points",
-        "action":       "VIP Reward: แจกแต้ม X2",
+        "action":       "VIP Reward: แจกแต้มพิเศษ 100 แต้ม",
         "dotdash_offer": {"offer_type": "points", "points_amount": 100,
                           "min_spend": 0, "expiry_days": 30},
     },
@@ -552,6 +554,97 @@ PERSUADABLE_RULES = [
 ]
 
 
+# ─── Low-basket rules ────────────────────────────────────────────────────────
+# Actions the engine picks directly for customers whose average basket is below
+# CONFIG["low_basket_threshold"] (uplift_engine.calculate_action_and_profit).  They are not
+# matched through matches()/menus — they exist here so every action has a stable id and an offer.
+# The offer's size follows the cost rate the engine charges for the action (rate_key).
+
+LOW_BASKET_RULES = [
+    {
+        "id":       "low_milestone",
+        "tiers":    ["champions"],
+        "rate_key": "milestone_reward",
+        "action":   "Milestone Reward: สั่งครบ {basket:.0f} บาท รับ {pts} แต้ม",
+        # points and the basket target come from CONFIG at call time (never a copy)
+        "dotdash_offer_fn": lambda: {"offer_type": "points",
+                                     "points_amount": _CONFIG["milestone_points"],
+                                     "min_spend": _CONFIG["milestone_basket"], "expiry_days": 30},
+    },
+    {
+        "id":       "low_welcome",
+        "tiers":    ["new_customer"],
+        "rate_key": "new_customer_welcome",
+        "action":   "Welcome: สั่งครั้งที่ 2 รับส่วนลด 10%",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 10.0, "min_spend": 0, "expiry_days": 30},
+    },
+    {
+        "id":       "low_abouttosleep_miss_you",
+        "tiers":    ["about_to_sleep"],
+        "rate_key": "standard",
+        "action":   "เราคิดถึงคุณ: กลับมาหาเราก่อนที่จะไม่ได้เจอกัน",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 5.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_hibernating_nudge",
+        "tiers":    ["hibernating"],
+        "rate_key": "bundle_upsell_low",
+        "action":   "Reactivation Nudge: กลับมาช้อปรับส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 3.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_churn_winback",
+        "tiers":    ["churn_risk", "cant_lose"],
+        "rate_key": "churn_rescue",
+        "action":   "Early Win-Back: กลับมาหาเรา รับส่วนลดพิเศษ",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 12.0, "min_spend": 0, "expiry_days": 14},
+    },
+    {
+        "id":       "low_bundle_upsell",
+        "rate_key": "bundle_upsell_low",
+        "action":   "Bundle Upsell: เพิ่ม {bundle}",
+        "dotdash_offer": {"offer_type": "coupon", "coupon_type": "percent",
+                          "coupon_value": 3.0, "min_spend": 0, "expiry_days": 30},
+    },
+]
+
+# Stable action_key -> rule.  The key is the rule id: names may change, keys never do.
+ACTION_KEYS = {r["id"]: r for r in SURE_THING_RULES + PERSUADABLE_RULES + LOW_BASKET_RULES}
+
+# What kind of action a rule is (for CRM grouping; consumers must not parse action names).
+# The list may gain values; existing values never change meaning.
+ACTION_GROUP_VALUES = ("win_back", "retain", "loyalty_reward", "onboarding", "upsell", "other")
+
+_G = {
+    "win_back": ["st_cantlose_winback", "churnrisk_rescue_bundle", "churnrisk_offpeak_traffic", "cantlose_vip_winback",
+                 "cantlose_aggressive_offpeak", "low_churn_winback", "hiber_reactivation_deep",
+                 "hiber_reactivation_traffic", "low_hibernating_nudge", "aboutsleep_urgent", "aboutsleep_traffic_driver",
+                 "low_abouttosleep_miss_you"],
+    "retain": ["loyal_standard", "promising_reengage", "promising_offpeak", "needattn_bundle", "needattn_offpeak_traffic",
+               "atrisk_discount_bundle", "atrisk_standard_offpeak", "atrisk_standard_peak", "atrisk_offpeak_traffic",
+               "mid_festival_guard", "mid_offpeak_traffic", "mid_standard_peak", "mid_standard_offpeak"],
+    "loyalty_reward": ["st_vip_reward_offpeak", "st_vip_early_access_peak", "st_loyalty_nurture", "loyal_vip_bundle",
+                       "loyal_vip_reward", "potloyal_habit_builder", "potloyal_offpeak_vip", "champ_vip_bundle",
+                       "champ_early_access_peak", "champ_early_access_offpeak", "champ_vip_reward",
+                       "mid_offpeak_vip_points", "mid_vip_reward_peak", "mid_vip_reward_offpeak",
+                       "mid_vip_early_access_peak", "mid_vip_early_access_offpeak", "low_milestone"],
+    "onboarding": ["st_newcust_welcome", "newcust_welcome_peak", "newcust_welcome_offpeak", "low_welcome"],
+    "upsell": ["mid_bundle_upsell_peak", "mid_bundle_upsell_offpeak", "low_bundle_upsell"],
+}
+ACTION_GROUPS = {key: group for group, keys in _G.items() for key in keys}
+
+_unmapped = set(ACTION_KEYS) - set(ACTION_GROUPS)
+_unknown = set(ACTION_GROUPS) - set(ACTION_KEYS)
+if _unmapped or _unknown:     # fail at import: a rule without a group would reach consumers as null
+    raise RuntimeError(f"ACTION_GROUPS out of sync with rules: unmapped={sorted(_unmapped)} unknown={sorted(_unknown)}")
+for _key, _group in ACTION_GROUPS.items():
+    ACTION_KEYS[_key]["action_group"] = _group
+
+
 # ---------------------------------------------------------------------------
 # DotDash offer helper
 # ---------------------------------------------------------------------------
@@ -570,7 +663,8 @@ def get_dotdash_offer(rule: dict) -> dict:
         ``{offer_type, points_amount?, coupon_type?, coupon_value?,
            min_spend, expiry_days}``
     """
-    offer = dict(rule.get("dotdash_offer") or {})
+    fn = rule.get("dotdash_offer_fn")
+    offer = dict(fn() if fn else (rule.get("dotdash_offer") or {}))
     if not offer:
         # Fallback: infer from rate_key
         rk = rule.get("rate_key", "")
@@ -584,8 +678,56 @@ def get_dotdash_offer(rule: dict) -> dict:
 
 
 def get_dotdash_offer_by_id(rule_id: str) -> dict:
-    """Look up a rule by id across both rule lists and return its DotDash offer."""
+    """Return the DotDash offer of the rule with this id (any rule list).
+
+    Raises ValueError for an unknown id — a guessed offer would silently reward the wrong thing.
+    """
+    rule = ACTION_KEYS.get(rule_id)
+    if rule is None:
+        raise ValueError(f"unknown action_key: {rule_id!r}")
+    return get_dotdash_offer(rule)
+
+
+_NO_PROMOTION_PREFIXES = ("Do Nothing", "Zero-Cost")
+
+
+def infer_dotdash_offer(action_key: str | None, action: str = "") -> dict:
+    """The DotDash offer for one decision — the public, stable entry point (used by ml-service).
+
+    ``action_key`` (the id of the rule that produced the action) is authoritative: an unknown key
+    raises ValueError.  Without a key (rows produced before action_key existed) the action *text*
+    is matched against the rule templates — a legacy path that logs a warning and may guess wrong.
+    Returns ``{offer_type, points_amount?, coupon_type?, coupon_value?, min_spend, expiry_days,
+    action_key, action_group}``.
+    """
+    if action_key is not None:
+        return {**get_dotdash_offer_by_id(action_key), "action_key": action_key,
+                "action_group": ACTION_KEYS[action_key]["action_group"]}
+
+    if not action or action.startswith(_NO_PROMOTION_PREFIXES):
+        return {"offer_type": "points", "points_amount": 0, "min_spend": 0,
+                "expiry_days": 0, "action_key": None, "action_group": None}
+
+    logging.getLogger(__name__).warning(
+        "infer_dotdash_offer called without action_key; matching action text %r (legacy, may be wrong)", action)
+    return {**_offer_from_action_text(action), "action_key": None, "action_group": None}
+
+
+# Names that were renamed; rows written before the rename still carry them.  The old name was shared
+# by rules with different points, so it maps to what text-matching always answered (the first rule).
+_LEGACY_ACTION_NAMES = {"VIP Reward: แจกแต้ม X2": "st_vip_reward_offpeak"}
+
+
+def _offer_from_action_text(action: str) -> dict:
+    """Legacy: renamed-action lookup, rule-template prefix match, then keyword fallback."""
+    if action in _LEGACY_ACTION_NAMES:
+        return get_dotdash_offer_by_id(_LEGACY_ACTION_NAMES[action])
     for rule in SURE_THING_RULES + PERSUADABLE_RULES:
-        if rule.get("id") == rule_id:
+        prefix = rule["action"].split("{bundle}")[0].strip().rstrip(":").strip()
+        if prefix and prefix in action:
             return get_dotdash_offer(rule)
-    return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
+    a = action.lower()
+    if any(w in a for w in ["แต้ม", "vip reward", "loyalty", "points", "milestone", "early access", "habit"]):
+        return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
+    return {"offer_type": "coupon", "coupon_type": "percent",
+            "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14}
