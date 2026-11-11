@@ -28,7 +28,7 @@ from uplift_engine import REGISTRY_PATH, _check_features, build_serving_context,
 from model_registry import ModelRegistry, RegistryError
 from ingest import detect_source, ingest_meripos, quality_gate
 from store_intelligence import build_store_profile, get_store_embedding
-from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer
+from action_rules import SURE_THING_RULES, PERSUADABLE_RULES, get_dotdash_offer, infer_dotdash_offer
 
 
 # ---------------------------------------------------------------------------
@@ -190,30 +190,8 @@ def _find_budget_for_target(approved: pd.DataFrame, target_profit: float) -> flo
 # ---------------------------------------------------------------------------
 
 def _infer_dotdash_offer(action: str) -> dict:
-    """Map a recommended_action string back to its dotdash_offer spec.
-
-    Tries rule template matching first (strips ``{bundle}`` substitutions),
-    then falls back to keyword-based inference.
-    """
-    if not action or action.startswith("Do Nothing") or action.startswith("Zero-Cost"):
-        return {"offer_type": "points", "points_amount": 0, "min_spend": 0, "expiry_days": 0}
-
-    # Template match: check every rule to see if its action template prefix
-    # appears in the actual action string (bundle will have been substituted)
-    for rule in SURE_THING_RULES + PERSUADABLE_RULES:
-        template = rule["action"]
-        # Strip {bundle} placeholder — compare the fixed prefix before it
-        prefix = template.split("{bundle}")[0].strip().rstrip(":").strip()
-        if prefix and prefix in action:
-            return get_dotdash_offer(rule)
-
-    # Keyword fallback
-    a = action.lower()
-    if any(w in a for w in ["แต้ม", "vip reward", "loyalty", "points", "milestone",
-                             "early access", "habit"]):
-        return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
-    return {"offer_type": "coupon", "coupon_type": "percent",
-            "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14}
+    """Deprecated text-only alias of action_rules.infer_dotdash_offer (kept one release)."""
+    return infer_dotdash_offer(None, action)
 
 
 def _build_dotdash_segments(selected: pd.DataFrame) -> list[dict]:

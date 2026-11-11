@@ -64,6 +64,8 @@ EVALUATION STRATEGY
   PERSUADABLE_RULES — best_profit:  all matching viable rules collected, max profit wins.
 """
 
+import logging
+
 from business_config import CONFIG as _CONFIG
 
 
@@ -647,8 +649,48 @@ def get_dotdash_offer(rule: dict) -> dict:
 
 
 def get_dotdash_offer_by_id(rule_id: str) -> dict:
-    """Look up a rule by id (any rule list) and return its DotDash offer."""
+    """Return the DotDash offer of the rule with this id (any rule list).
+
+    Raises ValueError for an unknown id — a guessed offer would silently reward the wrong thing.
+    """
     rule = ACTION_KEYS.get(rule_id)
-    if rule is not None:
-        return get_dotdash_offer(rule)
-    return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
+    if rule is None:
+        raise ValueError(f"unknown action_key: {rule_id!r}")
+    return get_dotdash_offer(rule)
+
+
+_NO_PROMOTION_PREFIXES = ("Do Nothing", "Zero-Cost")
+
+
+def infer_dotdash_offer(action_key: str | None, action: str = "") -> dict:
+    """The DotDash offer for one decision — the public, stable entry point (used by ml-service).
+
+    ``action_key`` (the id of the rule that produced the action) is authoritative: an unknown key
+    raises ValueError.  Without a key (rows produced before action_key existed) the action *text*
+    is matched against the rule templates — a legacy path that logs a warning and may guess wrong.
+    Returns ``{offer_type, points_amount?, coupon_type?, coupon_value?, min_spend, expiry_days,
+    action_key}``.
+    """
+    if action_key is not None:
+        return {**get_dotdash_offer_by_id(action_key), "action_key": action_key}
+
+    if not action or action.startswith(_NO_PROMOTION_PREFIXES):
+        return {"offer_type": "points", "points_amount": 0, "min_spend": 0,
+                "expiry_days": 0, "action_key": None}
+
+    logging.getLogger(__name__).warning(
+        "infer_dotdash_offer called without action_key; matching action text %r (legacy, may be wrong)", action)
+    return {**_offer_from_action_text(action), "action_key": None}
+
+
+def _offer_from_action_text(action: str) -> dict:
+    """Legacy: rule-template prefix match, then keyword fallback."""
+    for rule in SURE_THING_RULES + PERSUADABLE_RULES:
+        prefix = rule["action"].split("{bundle}")[0].strip().rstrip(":").strip()
+        if prefix and prefix in action:
+            return get_dotdash_offer(rule)
+    a = action.lower()
+    if any(w in a for w in ["แต้ม", "vip reward", "loyalty", "points", "milestone", "early access", "habit"]):
+        return {"offer_type": "points", "points_amount": 50, "min_spend": 0, "expiry_days": 30}
+    return {"offer_type": "coupon", "coupon_type": "percent",
+            "coupon_value": 15.0, "min_spend": 0, "expiry_days": 14}
