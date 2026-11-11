@@ -97,3 +97,19 @@ def test_planner_run_end_to_end_every_selected_customer_is_in_exactly_one_group(
     ids = [c for g in groups for c in g["customer_ids"]]
     assert len(ids) == len(set(ids)) == report["customers_selected"]
     assert all(g["action_key"] and g["dotdash_offer"]["action_key"] == g["action_key"] for g in groups)
+
+
+def test_api_spec_example_shows_every_field_a_dotdash_group_really_has():
+    """The documented example is what a DotDash developer codes against — it must not lag the shipped contract."""
+    import os
+    import re
+    text = open(os.path.join(os.path.dirname(__file__), "..", "API_SPEC.md"), encoding="utf-8").read()
+    m = re.search(r'"dotdash_segments": \[(.*?)\n  \]\n\}', text, re.S)
+    assert m, "dotdash_segments example not found"
+    example = m.group(1)
+    for field in ("segment_name", "action_key", "action_group", "recommended_action", "customer_count", "customer_ids",
+                  "expected_profit", "actual_spend", "dotdash_offer", "bundle_items", "bundle_coverage",
+                  "bundle_low_coverage", "cost_source"):
+        assert f'"{field}"' in example, field
+    assert '"schema_version"' in text.split('"dotdash_segments"')[0]          # top-level, before the groups
+    assert "422" in text and "point_value_thb" in text and "run_layer4" in text

@@ -705,21 +705,26 @@ _NEW_OUTPUT_COLUMNS = ["action_key", "cost_source", "action_group", "profit_basi
 
 
 def _reconcile_promo_advisor(detail):
-    """The Promo Advisor may replace the engine's action with the shop's own promo; keep action_key and
-    cost_source truthful: operator promo -> 'operator_promo'/'operator'; nothing to send -> none."""
-    if "final_source" not in detail.columns or "action_key" not in detail.columns:
+    """Keep action_key / cost_source / action_group / profit_basis truthful after the engine's decision was
+    changed downstream: the Promo Advisor may replace the action with the shop's own promo (operator_promo /
+    operator), and the Promo Advisor or the budget knapsack may turn a row into "Do Nothing ..." (no key,
+    cost_source none).  Whatever made a row do nothing, it claims no promotion."""
+    if "action_key" not in detail.columns:
         return detail
     detail = detail.copy()
-    op = detail["final_source"] == "operator"
-    detail.loc[op, "action_key"] = "operator_promo"
-    detail.loc[op, "cost_source"] = "operator"
-    detail.loc[op, "action_group"] = "other"
-    detail.loc[op, "profit_basis"] = None
-    none = detail["final_source"] == "none"
-    detail.loc[none, "action_key"] = None
-    detail.loc[none, "cost_source"] = "none"
-    detail.loc[none, "action_group"] = None
-    detail.loc[none, "profit_basis"] = None
+    if "final_source" in detail.columns:
+        op = detail["final_source"] == "operator"
+        detail.loc[op, "action_key"] = "operator_promo"
+        detail.loc[op, "cost_source"] = "operator"
+        detail.loc[op, "action_group"] = "other"
+        detail.loc[op, "profit_basis"] = None
+        nothing = detail["final_source"] == "none"
+    else:
+        nothing = pd.Series(False, index=detail.index)
+    action = detail["recommended_action"].fillna("").astype(str)
+    nothing = nothing | action.str.startswith("Do Nothing") | action.str.startswith("Zero-Cost")
+    for col, value in (("action_key", None), ("action_group", None), ("profit_basis", None), ("cost_source", "none")):
+        detail.loc[nothing, col] = value
     return detail
 
 

@@ -110,3 +110,20 @@ def test_both_run_layer4_and_the_cli_main_build_the_view_with_the_same_helper():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "campaign_pipeline.py"), encoding="utf-8").read()
     assert "detail[keep_cols]" not in src.replace("return detail[keep_cols]", "", 1)   # only the helper builds it
     assert src.count("return _layer4_view(detail)") + src.count("= _layer4_view(detail)") == 2
+
+
+def test_over_budget_rows_have_no_key_and_cost_source_none(env):
+    """The budget knapsack turns sent rows into 'Do Nothing (Over Budget)' — they must stop claiming a promotion."""
+    _ret, out = _run(env, campaign_budget=0.5)
+    over = out[out["recommended_action"] == "Do Nothing (Over Budget)"]
+    assert len(over) > 0 and (over["should_send"] == 0).all()
+    assert over["action_key"].isna().all() and over["action_group"].isna().all() and over["profit_basis"].isna().all()
+    assert (over["cost_source"] == "none").all()
+    kept = out[out["should_send"] == 1]
+    assert len(kept) > 0 and kept["action_key"].isin(list(ACTION_KEYS)).all()
+
+
+def test_every_do_nothing_row_is_keyless_whatever_made_it_do_nothing(env):
+    _ret, out = _run(env, campaign_budget=0.5)
+    nothing = out[out["recommended_action"].fillna("").str.startswith("Do Nothing")]
+    assert nothing["action_key"].isna().all() and (nothing["cost_source"] == "none").all()

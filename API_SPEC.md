@@ -62,6 +62,7 @@ X-API-Key: <key>
 
 ```json
 {
+  "schema_version": "1",
   "plan_id": "plan_20261106_143022",
   "store_id": "store_abc",
   "generated_at": "2026-11-06T14:30:22Z",
@@ -96,44 +97,28 @@ X-API-Key: <key>
   },
   "dotdash_segments": [
     {
-      "segment_name": "Potential Loyalist",
-      "action_key": "potloyal_habit_builder",
-      "recommended_action": "Habit Builder: สะสมแต้ม เพิ่มความถี่",
-      "customer_count": 76,
+      "segment_name": "Churn Risk",
+      "action_key": "st_loyalty_nurture",
+      "recommended_action": "Loyalty Nurture: แต้มสะสม",
+      "customer_count": 1,
       "customer_ids": [
-        "c095",
-        "c060",
+        "c024",
         "..."
       ],
-      "expected_profit": 20.67,
-      "actual_spend": 16.5,
+      "expected_profit": 0.95,
+      "actual_spend": 0.4,
       "dotdash_offer": {
         "offer_type": "points",
-        "points_amount": 60,
+        "points_amount": 50,
         "min_spend": 0,
         "expiry_days": 30,
-        "action_key": "potloyal_habit_builder"
-      }
-    },
-    {
-      "segment_name": "Champions",
-      "action_key": "champ_vip_bundle",
-      "recommended_action": "VIP Bundle: เซตคู่คุ้มค่า (Bundle)",
-      "customer_count": 31,
-      "customer_ids": [
-        "c041",
-        "c098",
-        "..."
-      ],
-      "expected_profit": 9.8,
-      "actual_spend": 7.81,
-      "dotdash_offer": {
-        "offer_type": "points",
-        "points_amount": 150,
-        "min_spend": 0,
-        "expiry_days": 30,
-        "action_key": "champ_vip_bundle"
-      }
+        "action_key": "st_loyalty_nurture",
+        "action_group": "loyalty_reward",
+        "bundle_items": null,
+        "bundle_coverage": 0.0,
+        "bundle_low_coverage": true
+      },
+      "cost_source": "estimated"
     }
   ]
 }
@@ -151,6 +136,12 @@ X-API-Key: <key>
   "message": "ต้องระบุ budget หรือ target_profit อย่างใดอย่างหนึ่ง"
 }
 ```
+
+#### Response 422
+
+`point_value_thb` ≤ 0, `redemption_rate` นอกช่วง (0, 1] หรือส่ง `redemption_rate` โดยไม่มี `point_value_thb` → **422** `validation_error` (ไม่ใช่ 400)
+
+> **หมายเหตุ:** `point_value_thb` / `redemption_rate` มีผลที่ `POST /campaign/plan` เท่านั้น ยังไม่มีผลกับ `run_layer4` (เส้นที่ ml-service ของ Dera เรียก) ที่นั่นต้นทุนแต้มยังเป็นค่าประมาณ (`cost_source: "estimated"`)
 
 ---
 
