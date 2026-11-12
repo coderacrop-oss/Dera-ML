@@ -19,7 +19,7 @@ import os
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +63,8 @@ def _decode_b64(encoded: str, label: str) -> bytes:
 
 
 def _add_src_to_path() -> None:
-    src = str(Path(__file__).parent.parent)
+    # not pathlib.Path: this module's `Path` is fastapi's (imported below it), and calling it here raises "Path parameters cannot have a default value"
+    src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if src not in sys.path:
         sys.path.insert(0, src)
 
@@ -446,12 +447,34 @@ def record_outcome(body: RecordOutcomeRequest, request: Request, _: None = Depen
     except Exception:
         stats = {"trend": "unavailable"}
 
+    # a short summary of the measured plan, how close the model was and what to do next (plan_insights; fixed rules and Thai templates)
+    from plan_insights import outcome_summary
+    plan_result = outcome_summary(
+        predicted_profit, body.actual_revenue,
+        window_complete=_window_complete(plan, body.measurement_period_days),
+        days=body.measurement_period_days,
+    )
+    plan_result["top1_counterfactual"] = (plan or {}).get("top1_counterfactual")
+
     return {
         "plan_id":           body.plan_id,
         "outcome_recorded":  True,
         "calibration_ratio": calibration_ratio,
         "calibration_stats": stats,
+        "plan_result":       plan_result,
     }
+
+
+def _window_complete(plan: dict | None, days: int) -> bool:
+    """True when the measurement window after the plan's execution has passed (a plan never executed has no window to wait for)."""
+    executed = (plan or {}).get("executed_at")
+    if not executed:
+        return True
+    try:
+        start = datetime.fromisoformat(str(executed).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) >= start + timedelta(days=days)
 
 
 # ---------------------------------------------------------------------------

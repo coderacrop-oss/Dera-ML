@@ -252,6 +252,7 @@ def build_schedule(
         "customer_id", "segment_name", "wave", "recommended_action",
         "send_datetime", "send_window", "send_time_hint", "channel",
         "message", "offer", "expected_profit", "should_send",
+        "action_key", "action_group",   # the stable key and category of the reward, when the engine sends them (they let a CRM group and label rows)
     ]
     out_cols = [c for c in out_cols if c in schedule_df.columns]
     schedule_df = schedule_df[out_cols].sort_values("send_datetime").reset_index(drop=True)
@@ -285,6 +286,11 @@ def build_schedule(
         "total_expected_profit": total_expected_profit,
         "avg_profit_per_customer": round(total_expected_profit / max(1, len(schedule_df)), 2),
     }
+    # one row per (segment, reward) with the hours and days to send and what the plan expects, and what the best row alone would earn
+    from plan_insights import plan_rows, top1_counterfactual
+    rows = plan_rows(schedule_df, holdout_df, peak_hours, off_peak_hours)
+    summary["rows"] = rows
+    summary["top1_counterfactual"] = top1_counterfactual(rows)
 
     return schedule_df, holdout_df, summary
 
