@@ -1310,7 +1310,9 @@ def decide_for_customers(model, ctx, customer_ids=None):
         d   = row.get('rfm_decile_segment', 1)
         # Fallback order: cluster_segment_map result → rfm_segment (stable) → empty
         seg = row.get('cluster_segment') or row.get('rfm_segment', '')
-        ft  = row.get('freq_trend', 0)   # positive = rising, negative = declining
+        if not isinstance(seg, str):   # customer absent from the RFM table -> NaN from the left merge
+            seg = ''
+        ft  = row.get('freq_trend', 0)  # positive = rising, negative = declining
 
         if r > _cantlose_days and f >= _cantlose_freq and d >= _cantlose_rfm:
             return "Can't Lose Them"
